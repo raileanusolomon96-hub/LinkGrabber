@@ -2,6 +2,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 #include <cmath>
+#include <functional>
+#include <vector>
 
 // Native "Windows 95 Minesweeper" widgets for LinkGrabber (mockup v1-ui.yaml). Header-only,
 // pure juce::Graphics, no images. All coordinates are in logical pixels.
@@ -330,6 +332,284 @@ namespace lgui
         std::array<int, count> order {}, rank {}, numbers {};
         Mode mode = Mode::hidden;
         int pct = 0, wave = -1, mineTile = -1;
+    };
+
+    //==========================================================================
+    // Shared external-drag logic (verified pattern from the Phase 2.0 spike, Logic Pro AU):
+    // performExternalDragDropOfFiles is called SYNCHRONOUSLY from the live mouseDrag event after
+    // >= 4 px movement; the guard flag is set BEFORE the call and cleared in the callback and in
+    // mouseUp; canMoveFiles = false; the source component is the draggable component itself.
+    // Never defer this call (callAsync / timers): macOS needs the window's current event.
+    class FileDragSource
+    {
+    public:
+        void mouseDown() { started = false; }
+        void mouseUp()   { started = false; }
+
+        // Returns true if a drag was started by this call.
+        bool mouseDrag(juce::Component& source, const juce::MouseEvent& e, const juce::File& file)
+        {
+            if (started || e.getDistanceFromDragStart() < 4)
+                return false;
+            if (! file.existsAsFile())
+                return false;
+
+            started = true;  // before the call so nothing can start a second drag
+            juce::Component::SafePointer<juce::Component> safe(&source);
+            juce::DragAndDropContainer::performExternalDragDropOfFiles(
+                juce::StringArray { file.getFullPathName() }, false, &source,
+                [safe, this] { if (safe != nullptr) started = false; });
+            return true;
+        }
+
+    private:
+        bool started = false;
+    };
+
+    //==========================================================================
+    // Result tile (mockup `result_tile`), local origin = (30,119), size 420x150. Whole tile drags.
+    class ResultTile : public juce::Component
+    {
+    public:
+        ResultTile() { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
+
+        void setInfo(const juce::String& newTitle, const juce::String& newMeta, const juce::String& newPath)
+        {
+            if (newTitle != title || newMeta != meta || newPath != path)
+            {
+                title = newTitle; meta = newMeta; path = newPath;
+                repaint();
+            }
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(kFace);
+            bevelRect(g, getLocalBounds(), 3, kLight, kDark);
+
+            // Grip icon at (14,14,28,56): 3 cols x 6 rows of 4px dots, 8px pitch
+            for (int c = 0; c < 3; ++c)
+                for (int r = 0; r < 6; ++r)
+                {
+                    const int dx = 14 + 4 + c * 8, dy = 14 + 6 + r * 8;
+                    g.setColour(kLight); g.fillRect(dx + 1, dy + 1, 4, 4);
+                    g.setColour(kDark);  g.fillRect(dx, dy, 4, 4);
+                }
+
+            g.setColour(kBlack);
+            g.setFont(makeFont(14.0f, true));
+            g.drawText(title, 58, 14, 348, 20, juce::Justification::centredLeft, true);
+            g.setFont(makeFont(12.0f));
+            g.drawText(meta, 58, 39, 348, 16, juce::Justification::centredLeft, true);
+
+            // Drag strip (14,94,392,40)
+            const juce::Rectangle<float> strip(14.0f, 94.0f, 392.0f, 40.0f);
+            g.setColour(juce::Colour(0xffd8d8f0));
+            g.fillRect(strip);
+            juce::Path outline, dashed;
+            outline.addRectangle(strip.reduced(1.0f));
+            const float dashes[] = { 6.0f, 4.0f };
+            juce::PathStrokeType(2.0f).createDashedStroke(dashed, outline, dashes, 2);
+            g.setColour(kNavy);
+            g.fillPath(dashed);
+            g.setFont(makeFont(13.0f, true));
+            g.drawText("Drag me to your DAW  >>", strip.toNearestInt(), juce::Justification::centred, false);
+        }
+
+        void mouseDown(const juce::MouseEvent&) override { drag.mouseDown(); }
+        void mouseUp(const juce::MouseEvent&) override   { drag.mouseUp(); }
+        void mouseDrag(const juce::MouseEvent& e) override { drag.mouseDrag(*this, e, juce::File(path)); }
+
+    private:
+        juce::String title, meta, path;
+        FileDragSource drag;
+    };
+
+    //==========================================================================
+    // History header bar (mockup `history_header`): raised, pressed = sunken, arrow right/down.
+    class ExpanderBar : public juce::Button
+    {
+    public:
+        ExpanderBar() : juce::Button("history") {}
+
+        void setExpanded(bool e) { if (e != expanded) { expanded = e; repaint(); } }
+        bool isExpanded() const { return expanded; }
+
+        void paintButton(juce::Graphics& g, bool, bool down) override
+        {
+            drawRaisedButton(g, getLocalBounds(), down);
+            const float o = down ? 1.0f : 0.0f;
+            juce::Path arrow;
+            if (expanded)
+                arrow.addTriangle(8.0f + o, 8.0f + o, 18.0f + o, 8.0f + o, 13.0f + o, 14.0f + o);   // down
+            else
+                arrow.addTriangle(9.0f + o, 6.0f + o, 9.0f + o, 16.0f + o, 15.0f + o, 11.0f + o);   // right
+            g.setColour(kBlack);
+            g.fillPath(arrow);
+            g.setFont(makeFont(12.0f));
+            g.drawText(getButtonText(), 24 + (int) o, 0 + (int) o, getWidth() - 28, getHeight(),
+                       juce::Justification::centredLeft, false);
+        }
+
+    private:
+        bool expanded = false;
+    };
+
+    //==========================================================================
+    // History list (mockup `history_list`), hand-painted. Rows are supplied by the editor.
+    class HistoryList : public juce::Component
+    {
+    public:
+        struct Row { juce::String id, title, path, format; bool missing = false; };
+        static constexpr int rowH = 22;
+
+        std::function<void(const juce::String& id)> onRemove;
+
+        HistoryList() { setWantsKeyboardFocus(true); }
+
+        void setRows(std::vector<Row> r)
+        {
+            rows = std::move(r);
+            if (findRow(selectedId) < 0)
+                selectedId.clear();
+            clampScroll();
+            repaint();
+        }
+
+        void setSelectedId(const juce::String& id) { selectedId = id; repaint(); }
+        juce::String getSelectedId() const { return selectedId; }
+        juce::String getSelectedPath() const
+        {
+            const int i = findRow(selectedId);
+            return i >= 0 ? rows[(size_t) i].path : juce::String();
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(kLight);
+            const int w = getWidth();
+            {
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(2, 2, w - 4, getHeight() - 4);
+                if (rows.empty())
+                {
+                    g.setColour(kDark);
+                    g.setFont(makeFont(12.0f));
+                    g.drawText("No downloads yet.", 8, 2, 300, rowH, juce::Justification::centredLeft, false);
+                }
+                for (size_t i = 0; i < rows.size(); ++i)
+                {
+                    const int y = 2 + (int) i * rowH - scrollY;
+                    if (y + rowH < 2 || y > getHeight()) continue;
+                    const auto& r = rows[i];
+                    const bool sel = (r.id == selectedId);
+                    if (sel) { g.setColour(kNavy); g.fillRect(2, y, w - 4, rowH); }
+                    g.setColour(sel ? kLight : (r.missing ? kDark : kBlack));
+                    g.setFont(makeFont(12.0f));
+                    g.drawText(r.title, 8, y, 262, rowH, juce::Justification::centredLeft, true);
+                    g.drawText(r.format.equalsIgnoreCase("wav") ? "WAV 24-bit" : "MP3 320",
+                               276, y, 80, rowH, juce::Justification::centredRight, false);
+                    g.drawText(r.missing ? "Missing" : "OK", 366, y, 60, rowH, juce::Justification::centredRight, false);
+                }
+            }
+            // Minimal scroll thumb when the content overflows
+            const int content = (int) rows.size() * rowH, view = getHeight() - 4;
+            if (content > view)
+            {
+                const int th = juce::jmax(16, view * view / content);
+                const int ty = 2 + (view - th) * scrollY / juce::jmax(1, content - view);
+                g.setColour(kDark);
+                g.fillRect(w - 2 - 8, ty, 8, th);
+            }
+            bevelRect(g, getLocalBounds(), 2, kDark, kLight);
+        }
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            grabKeyboardFocus();
+            drag.mouseDown();
+            const int i = rowAt(e.y);
+            dragPath.clear();
+            if (i >= 0)
+            {
+                selectedId = rows[(size_t) i].id;
+                if (! rows[(size_t) i].missing)
+                    dragPath = rows[(size_t) i].path;
+            }
+            else
+                selectedId.clear();
+            repaint();
+
+            if (i >= 0 && e.mods.isPopupMenu())
+            {
+                juce::PopupMenu m;
+                m.addItem(1, "Remove from history");
+                m.showMenuAsync(juce::PopupMenu::Options(),
+                                [safe = juce::Component::SafePointer<HistoryList>(this), id = selectedId](int result)
+                                { if (result == 1 && safe != nullptr && safe->onRemove) safe->onRemove(id); });
+            }
+        }
+
+        void mouseDrag(const juce::MouseEvent& e) override
+        {
+            if (dragPath.isNotEmpty() && ! e.mods.isPopupMenu())
+                drag.mouseDrag(*this, e, juce::File(dragPath));
+        }
+
+        void mouseUp(const juce::MouseEvent&) override { drag.mouseUp(); }
+
+        void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+        {
+            scrollY -= (int) std::round(w.deltaY * 3.0f * rowH * (w.isReversed ? -1.0f : 1.0f));
+            clampScroll();
+            repaint();
+        }
+
+        bool keyPressed(const juce::KeyPress& k) override
+        {
+            if ((k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) && selectedId.isNotEmpty())
+            {
+                if (onRemove) onRemove(selectedId);
+                return true;
+            }
+            if (k == juce::KeyPress::upKey || k == juce::KeyPress::downKey)
+            {
+                if (rows.empty()) return true;
+                int i = findRow(selectedId);
+                i = i < 0 ? 0 : juce::jlimit(0, (int) rows.size() - 1, i + (k == juce::KeyPress::downKey ? 1 : -1));
+                selectedId = rows[(size_t) i].id;
+                const int top = i * rowH, view = getHeight() - 4;
+                if (top < scrollY) scrollY = top;
+                else if (top + rowH > scrollY + view) scrollY = top + rowH - view;
+                clampScroll();
+                repaint();
+                return true;
+            }
+            return false;
+        }
+
+    private:
+        int findRow(const juce::String& id) const
+        {
+            if (id.isEmpty()) return -1;
+            for (size_t i = 0; i < rows.size(); ++i)
+                if (rows[i].id == id) return (int) i;
+            return -1;
+        }
+        int rowAt(int y) const
+        {
+            const int i = (y - 2 + scrollY) / rowH;
+            return (y >= 2 && i >= 0 && i < (int) rows.size()) ? i : -1;
+        }
+        void clampScroll()
+        {
+            scrollY = juce::jlimit(0, juce::jmax(0, (int) rows.size() * rowH - (getHeight() - 4)), scrollY);
+        }
+
+        std::vector<Row> rows;
+        juce::String selectedId, dragPath;
+        int scrollY = 0;
+        FileDragSource drag;
     };
 
     //==========================================================================

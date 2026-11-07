@@ -20,7 +20,7 @@ public:
 private:
     // DownloadManager::Listener (message thread)
     void downloadStatusChanged(const DownloadManager::Status& s) override { applyStatus(s); }
-    void downloadFinished(const DownloadManager::Status& s) override { applyStatus(s); }
+    void downloadFinished(const DownloadManager::Status& s) override;
 
     void timerCallback() override;
 
@@ -30,6 +30,13 @@ private:
     void cancelAndReset();
     void showInFinder();
     void setTransientMessage(const juce::String& text, bool isError);
+
+    // History (Phase 3.2)
+    void rebuildHistoryRows();          // re-read the store into the list (stats files for 'Missing')
+    void pollHistory();                 // 1 Hz: refreshIfChanged + missing/tile-file checks
+    void setHistoryExpanded(bool);
+    void removeHistoryRow(const juce::String& id);
+    void updatePanelVisibility();
 
     LinkGrabberAudioProcessor& processorRef;
 
@@ -44,6 +51,15 @@ private:
     lgui::BevelButton goButton { "Download", true };
     lgui::TileBoard board;
     lgui::BevelButton finderButton { "Show in Finder" };
+    lgui::ExpanderBar historyBar;
+    lgui::HistoryList historyList;
+    lgui::ResultTile resultTile;
+
+    struct Poller : juce::Timer
+    {
+        std::function<void()> fn;
+        void timerCallback() override { if (fn) fn(); }
+    } poller;                           // 1 Hz, history only (the 30 Hz timer stays job-only)
 
     // View model
     DownloadManager::State viewState = DownloadManager::State::idle;
@@ -57,11 +73,16 @@ private:
     bool transientIsError = false;
     bool viewActive = false;
     int historyCount = 0;
+    bool historyExpanded = false;
+    juce::String donePath;              // finished file shown in the result tile
+    bool tileShown = false;
 
     // TEMP SNAPSHOT (Phase 3.1): remove after phase
     void runSnapshots();                                          // TEMP SNAPSHOT (Phase 3.1): remove after phase
     bool snapshotMode = false;                                    // TEMP SNAPSHOT (Phase 3.1): remove after phase
     double waveProgressOverride = -1.0;                           // TEMP SNAPSHOT (Phase 3.1): remove after phase
+    bool snapshotRowsActive = false;                              // TEMP SNAPSHOT (Phase 3.2): remove after phase
+    int snapshotHistoryCount = 0;                                 // TEMP SNAPSHOT (Phase 3.2): remove after phase
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LinkGrabberAudioProcessorEditor)
 };

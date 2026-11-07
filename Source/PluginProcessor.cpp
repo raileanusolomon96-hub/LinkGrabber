@@ -1,6 +1,5 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
 #include "StateSanitiser.h"
 
@@ -118,68 +117,6 @@ void LinkGrabberAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 juce::AudioProcessorEditor* LinkGrabberAudioProcessor::createEditor()
 {
     return new LinkGrabberAudioProcessorEditor(*this);
-}
-
-// SPIKE (Phase 2.0): remove/productionise in Phase 3.2
-juce::File LinkGrabberAudioProcessor::getSpikeDummyFile(bool wav)
-{
-    const juce::File folder(getOutputFolder());
-    if (! folder.createDirectory().wasOk())
-        return {};
-
-    if (wav)
-    {
-        const auto file = folder.getChildFile("LinkGrabber drag test.wav");
-        if (file.existsAsFile() && file.getSize() > 44)
-            return file;
-
-        file.deleteFile();
-        std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
-        if (stream == nullptr)
-            return {};
-
-        juce::WavAudioFormat format;
-        auto writer = format.createWriterFor(stream,
-            juce::AudioFormatWriterOptions{}.withSampleRate(44100.0)
-                                            .withNumChannels(2)
-                                            .withBitsPerSample(24));
-        if (writer == nullptr)
-            return {};
-
-        constexpr int numSamples = 44100;
-        juce::AudioBuffer<float> buffer(2, numSamples);
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const auto v = 0.25f * static_cast<float>(std::sin(juce::MathConstants<double>::twoPi * 440.0
-                                                               * static_cast<double>(i) / 44100.0));
-            buffer.setSample(0, i, v);
-            buffer.setSample(1, i, v);
-        }
-        writer->writeFromAudioSampleBuffer(buffer, 0, numSamples);
-        writer.reset();  // flush and close
-        return file;
-    }
-
-    const auto file = folder.getChildFile("LinkGrabber drag test.mp3");
-    if (file.existsAsFile() && file.getSize() > 417)
-        return file;
-
-    // MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo, no padding, no CRC: frame = 417 bytes.
-    // Header FF FB 90 00 followed by an all-zero payload (zero side info/main data = silence).
-    // 39 frames * 26.12 ms = ~1.02 s. Placeholder only; NOT produced by an encoder.
-    file.deleteFile();
-    juce::MemoryBlock data;
-    constexpr size_t frameSize = 417;
-    constexpr size_t numFrames = 39;
-    data.setSize(frameSize * numFrames, true);  // zero-filled
-    for (size_t f = 0; f < numFrames; ++f)
-    {
-        const unsigned char header[4] = { 0xFF, 0xFB, 0x90, 0x00 };
-        data.copyFrom(header, static_cast<int>(f * frameSize), 4);
-    }
-    if (! file.replaceWithData(data.getData(), data.getSize()))
-        return {};
-    return file;
 }
 
 juce::ValueTree LinkGrabberAudioProcessor::getOrCreateExtras()

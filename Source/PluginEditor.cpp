@@ -11,6 +11,13 @@ namespace
         if (fmt.equalsIgnoreCase("mp3")) return "MP3 320";
         return fallback;
     }
+
+    juce::String formatSize(juce::int64 bytes)
+    {
+        if (bytes <= 0) return "0 KB";
+        const double mb = (double) bytes / (1024.0 * 1024.0);
+        return mb >= 1.0 ? juce::String(mb, 1) + " MB" : juce::String(juce::jmax(1, (int) (bytes / 1024))) + " KB";
+    }
 }
 
 //==============================================================================
@@ -37,11 +44,12 @@ LinkGrabberAudioProcessorEditor::LinkGrabberAudioProcessorEditor(LinkGrabberAudi
     linkField.onTextChange = [this]
     {
         processorRef.setLink(linkField.getText());
+        const auto st = processorRef.getDownloadManager().getStatus();
+        if (viewState == DownloadManager::State::done)
+            viewResetSerial = st.jobSerial;  // editing the link leaves the result tile
         if (transientText.isNotEmpty())
-        {
             transientText.clear();
-            applyStatus(processorRef.getDownloadManager().getStatus());
-        }
+        applyStatus(st);
     };
     linkField.onReturnKey = [this] { startOrCancel(); };
     addAndMakeVisible(linkField);
@@ -67,11 +75,17 @@ LinkGrabberAudioProcessorEditor::LinkGrabberAudioProcessorEditor(LinkGrabberAudi
     finderButton.onClick = [this] { showInFinder(); };
     addAndMakeVisible(finderButton);
 
+    historyBar.onClick = [this] { setHistoryExpanded(! historyExpanded); };
+    addAndMakeVisible(historyBar);
+    historyList.onRemove = [this](const juce::String& id) { removeHistoryRow(id); };
+    addChildComponent(historyList);
+    addChildComponent(resultTile);
+
     setSize(480, 360);
     setResizable(false, false);
 
     processorRef.getHistoryStore().reload();
-    historyCount = (int) processorRef.getHistoryStore().getEntries().size();
+    rebuildHistoryRows();
 
     // Resume from whatever the (processor-owned) manager is doing right now.
     auto& mgr = processorRef.getDownloadManager();
@@ -83,17 +97,25 @@ LinkGrabberAudioProcessorEditor::LinkGrabberAudioProcessorEditor(LinkGrabberAudi
         && juce::SystemStats::getEnvironmentVariable("LINKGRABBER_SNAPSHOT_DIR", {}).isNotEmpty())  // TEMP SNAPSHOT (Phase 3.1): remove after phase
     {
         snapshotMode = true;  // TEMP SNAPSHOT (Phase 3.1): remove after phase
+        poller.stopTimer();   // TEMP SNAPSHOT (Phase 3.2): remove after phase
         juce::Timer::callAfterDelay(1500, [safe = juce::Component::SafePointer<juce::Component>(this)]  // TEMP SNAPSHOT (Phase 3.1): remove after phase
         {
             if (auto* self = dynamic_cast<LinkGrabberAudioProcessorEditor*>(safe.getComponent()))  // TEMP SNAPSHOT (Phase 3.1): remove after phase
                 self->runSnapshots();  // TEMP SNAPSHOT (Phase 3.1): remove after phase
         });
     }
+
+    if (! snapshotMode)
+    {
+        poller.fn = [this] { pollHistory(); };
+        poller.startTimerHz(1);
+    }
 }
 
 LinkGrabberAudioProcessorEditor::~LinkGrabberAudioProcessorEditor()
 {
     stopTimer();
+    poller.stopTimer();
     processorRef.getDownloadManager().removeListener(this);  // the job keeps running without us
     formatAttachment.reset();
     setLookAndFeel(nullptr);
@@ -126,6 +148,22 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         shownPercent = 100;
     else
         shownPercent = juce::jmax(shownPercent, juce::jlimit(0, 100, s.percent));
+
+    // Result tile: only for a finished job whose file still exists.
+    tileShown = false;
+    if (st == State::done && s.filePath.isNotEmpty())
+    {
+        const juce::File f(s.filePath);
+        if (f.existsAsFile() || snapshotMode)  // TEMP SNAPSHOT (Phase 3.2): remove "|| snapshotMode" after phase
+        {
+            tileShown = true;
+            donePath = s.filePath;
+            const auto title = s.title.isNotEmpty() ? s.title : f.getFileNameWithoutExtension();
+            const juce::String fmt = s.format.equalsIgnoreCase("wav") || f.hasFileExtension("wav") ? "WAV" : "MP3";
+            const auto bytes = s.bytes > 0 ? s.bytes : f.getSize();
+            resultTile.setInfo(title, fmt + " | " + formatSize(bytes), s.filePath);
+        }
+    }
 
     percentLed.setValue(shownPercent);
     elapsedLed.setValue(reset || st == State::idle ? 0 : (int) s.elapsedSeconds);
@@ -174,7 +212,8 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             case State::downloading: statusText = "Downloading... " + juce::String(shownPercent) + "%"; break;
             case State::converting:  statusText = "Converting to " + formatLabelFor(s.format, formatBox.getText()) + "..."; break;
             case State::done:
-                statusText = "Done. File saved to " + juce::File(s.filePath).getParentDirectory().getFullPathName();
+                statusText = tileShown ? juce::String("Done. Drag the file tile into your DAW.")
+                                       : "Done. File saved to " + juce::File(s.filePath).getParentDirectory().getFullPathName();
                 break;
             case State::error:
                 statusText = s.errorMessage.isNotEmpty() ? s.errorMessage : DownloadCommand::userMessage(s.errorKind);
@@ -183,7 +222,10 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         }
 
     goButton.setButtonText(viewActive ? "Cancel" : "Download");
-    historyCount = (int) processorRef.getHistoryStore().getEntries().size();
+    historyCount = snapshotRowsActive ? snapshotHistoryCount  // TEMP SNAPSHOT (Phase 3.2): remove after phase
+                                      : (int) processorRef.getHistoryStore().getEntries().size();
+    historyBar.setButtonText("History (" + juce::String(historyCount) + ")");
+    updatePanelVisibility();
 
     // Timer only while a job is active (also drives the converting sweep and the live elapsed LED).
     if (viewActive && ! snapshotMode)
@@ -194,6 +236,73 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         stopTimer();
 
     repaint();
+}
+
+void LinkGrabberAudioProcessorEditor::downloadFinished(const DownloadManager::Status& s)
+{
+    applyStatus(s);
+    // The processor's own listener (which adds the history row) may run after this one. Re-read
+    // the history on the next message-loop turn, when every listener has been called.
+    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<LinkGrabberAudioProcessorEditor>(this)]
+    {
+        if (safe != nullptr)
+        {
+            safe->rebuildHistoryRows();
+            safe->applyStatus(safe->processorRef.getDownloadManager().getStatus());
+        }
+    });
+}
+
+void LinkGrabberAudioProcessorEditor::updatePanelVisibility()
+{
+    historyBar.setExpanded(historyExpanded);
+    historyList.setVisible(historyExpanded);
+    resultTile.setVisible(tileShown && ! historyExpanded);
+    board.setVisible(! historyExpanded && ! tileShown);
+}
+
+void LinkGrabberAudioProcessorEditor::setHistoryExpanded(bool e)
+{
+    historyExpanded = e;
+    if (e)
+        rebuildHistoryRows();
+    updatePanelVisibility();
+    repaint();
+}
+
+void LinkGrabberAudioProcessorEditor::rebuildHistoryRows()
+{
+    if (snapshotRowsActive)  // TEMP SNAPSHOT (Phase 3.2): remove after phase
+        return;              // TEMP SNAPSHOT (Phase 3.2): remove after phase
+
+    const auto& entries = processorRef.getHistoryStore().getEntries();
+    std::vector<lgui::HistoryList::Row> rows;
+    rows.reserve(entries.size());
+    for (const auto& e : entries)
+        rows.push_back({ e.id, e.title.isNotEmpty() ? e.title : juce::File(e.path).getFileNameWithoutExtension(),
+                         e.path, e.format, HistoryStore::isMissingOnDisk(e) });
+    historyList.setRows(std::move(rows));
+    historyCount = (int) entries.size();
+    historyBar.setButtonText("History (" + juce::String(historyCount) + ")");
+}
+
+void LinkGrabberAudioProcessorEditor::pollHistory()
+{
+    const bool changed = processorRef.getHistoryStore().refreshIfChanged();
+    if (changed || historyExpanded)
+        rebuildHistoryRows();
+    else if ((int) processorRef.getHistoryStore().getEntries().size() != historyCount)
+        rebuildHistoryRows();
+
+    // Result tile disappears if its file was moved or deleted.
+    if (tileShown && ! juce::File(donePath).existsAsFile())
+        applyStatus(processorRef.getDownloadManager().getStatus());
+}
+
+void LinkGrabberAudioProcessorEditor::removeHistoryRow(const juce::String& id)
+{
+    processorRef.getHistoryStore().remove(id);  // the audio file is never touched
+    rebuildHistoryRows();
 }
 
 void LinkGrabberAudioProcessorEditor::timerCallback()
@@ -250,6 +359,15 @@ void LinkGrabberAudioProcessorEditor::startOrCancel()
 
 void LinkGrabberAudioProcessorEditor::showInFinder()
 {
+    if (historyExpanded)
+    {
+        const juce::File sel(historyList.getSelectedPath());
+        if (sel.existsAsFile())
+        {
+            sel.revealToUser();
+            return;
+        }
+    }
     const auto& entries = processorRef.getHistoryStore().getEntries();
     if (! entries.empty())
     {
@@ -279,17 +397,6 @@ void LinkGrabberAudioProcessorEditor::paint(juce::Graphics& g)
     drawSunken(g, { 15, 71, 200, 26 }, 2, kLight);    // link field frame (TextEditor sits inside)
     drawSunken(g, { 15, 107, 450, 174 }, 3, kFace);   // board frame
 
-    // History header (expander + list are Phase 3.2): non-functional label for now
-    drawRaisedButton(g, { 15, 289, 340, 22 }, false);
-    {
-        juce::Path arrow;
-        arrow.addTriangle(24.0f, 295.0f, 24.0f, 305.0f, 29.0f, 300.0f);  // right-pointing (collapsed)
-        g.setColour(kBlack);
-        g.fillPath(arrow);
-        g.setFont(makeFont(12.0f));
-        g.drawText("History (" + juce::String(historyCount) + ")", 36, 289, 300, 22, juce::Justification::centredLeft, false);
-    }
-
     // Status bar
     drawSunken(g, { 15, 321, 450, 24 }, 1, kFace);
     g.setColour(statusIsError ? kErrorText : kBlack);
@@ -310,6 +417,9 @@ void LinkGrabberAudioProcessorEditor::resized()
 
     board.setBounds(24, 113, 432, 162);
     finderButton.setBounds(365, 289, 100, 22);
+    historyBar.setBounds(15, 289, 340, 22);
+    historyList.setBounds(15, 107, 450, 174);
+    resultTile.setBounds(30, 119, 420, 150);
 }
 
 //==============================================================================
@@ -320,7 +430,7 @@ void LinkGrabberAudioProcessorEditor::runSnapshots()
     const juce::File dir(juce::SystemStats::getEnvironmentVariable("LINKGRABBER_SNAPSHOT_DIR", {}));
     dir.createDirectory();
 
-    struct Case { const char* name; DownloadManager::Status st; double wave; bool link; };
+    struct Case { const char* name; DownloadManager::Status st; double wave; bool link; int extra = 0; };  // extra: TEMP SNAPSHOT (Phase 3.2)
     juce::uint32 serial = 1000;
     auto mk = [&serial](State s, int pct, double el)
     {
@@ -353,6 +463,14 @@ void LinkGrabberAudioProcessorEditor::runSnapshots()
         cases.push_back({ "error-toolmissing", st2, -1.0, true });
     }
     cases.push_back({ "link-filled", mk(State::idle, 0, 0), -1.0, true });
+    {   // TEMP SNAPSHOT (Phase 3.2): remove after phase
+        auto st = mk(State::done, 100, 12);
+        st.title = "Example Song Title"; st.bytes = 7549747; st.format = "mp3";
+        st.filePath = "/tmp/linkgrabber-snapshot/Example Song Title.mp3";
+        cases.push_back({ "done-tile", st, -1.0, true, 1 });
+        cases.push_back({ "history-expanded", mk(State::idle, 0, 0), -1.0, true, 2 });
+        cases.push_back({ "history-collapsed-3", mk(State::idle, 0, 0), -1.0, true, 3 });
+    }
 
     const juce::String link = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
     for (double scale : { 2.0, 1.0 })
@@ -362,6 +480,20 @@ void LinkGrabberAudioProcessorEditor::runSnapshots()
             linkField.setText(std::string_view(c.name) == "idle" ? juce::String() : link, juce::dontSendNotification);
             waveProgressOverride = c.wave;
             lastSerial = 0;
+            viewResetSerial = 0;  // TEMP SNAPSHOT (Phase 3.2): remove after phase
+            // TEMP SNAPSHOT (Phase 3.2): remove after phase
+            snapshotRowsActive = (c.extra == 2 || c.extra == 3);
+            snapshotHistoryCount = snapshotRowsActive ? 3 : 0;
+            if (snapshotRowsActive)
+            {
+                historyList.setRows({ { "s1", "Example Song Title", "/tmp/s1.mp3", "mp3", false },
+                                      { "s2", "Another Very Long Track Name That Should Be Truncated With An Ellipsis Somewhere", "/tmp/s2.wav", "wav", false },
+                                      { "s3", "Deleted Track (moved away)", "/tmp/s3.mp3", "mp3", true } });
+                historyList.setSelectedId(c.extra == 2 ? "s1" : "");
+            }
+            else
+                historyList.setRows({});
+            historyExpanded = (c.extra == 2);
             applyStatus(c.st);
             auto img = createComponentSnapshot(getLocalBounds(), true, (float) scale);
             const auto file = dir.getChildFile(juce::String("snap-") + c.name + (scale == 2.0 ? "" : "-1x") + ".png");

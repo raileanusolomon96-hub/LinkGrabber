@@ -42,13 +42,6 @@ public:
     juce::String getOutputFolder() const;
     void setOutputFolder(const juce::String& newFolderPath);
 
-    // SPIKE (Phase 2.0): remove/productionise in Phase 3.2
-    // Message-thread only. Generates (if missing) a dummy file in the output folder and
-    // returns it. wav: 1 s 440 Hz sine, 24-bit stereo 44.1 kHz (real audio).
-    // mp3: ~1 s of SILENT, structurally valid MPEG-1 Layer III frames (JUCE has no MP3
-    // encoder and the plugin must not shell out). Returns File() on failure.
-    juce::File getSpikeDummyFile(bool wav);
-
     // Global download history (message thread only; never touch from processBlock).
     HistoryStore& getHistoryStore() { return historyStore; }
 
