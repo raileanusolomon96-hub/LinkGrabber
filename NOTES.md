@@ -40,7 +40,7 @@ Dummy file notes: the WAV is real audio (1 s, 440 Hz, 24-bit stereo 44.1 kHz). J
 | Host / format | Drag result (WAV) | Drag result (MP3) | Notes | Date |
 |---------------|-------------------|-------------------|-------|------|
 | Standalone -> Finder | NOT YET TESTED | NOT YET TESTED | | |
-| Logic Pro, AU | WORKS (user report) | WORKS (user report) | User confirmed dragging from the plugin into Logic works; WAV vs MP3 not separately reported. Release build, not Debug | 2026-11-07 |
+| Logic Pro, AU | WORKS (user report, format unspecified) | not separately reported | User confirmed dragging from the plugin into Logic works; WAV vs MP3 not separately reported. Release build, not Debug | 2026-11-07 |
 | Ableton Live, VST3 | NOT YET TESTED | NOT YET TESTED | | |
 | Ableton Live, AU | NOT YET TESTED | NOT YET TESTED | | |
 | Reaper, VST3 | NOT YET TESTED | NOT YET TESTED | | |
