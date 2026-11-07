@@ -18,6 +18,14 @@ namespace
         const double mb = (double) bytes / (1024.0 * 1024.0);
         return mb >= 1.0 ? juce::String(mb, 1) + " MB" : juce::String(juce::jmax(1, (int) (bytes / 1024))) + " KB";
     }
+
+    // Global (all instances / sessions / projects) rights-notice acknowledgement marker:
+    // ~/Library/Application Support/LinkGrabber/notice-accepted-v1 on macOS.
+    juce::File noticeMarkerFile()
+    {
+        return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                   .getChildFile("LinkGrabber").getChildFile("notice-accepted-v1");
+    }
 }
 
 //==============================================================================
@@ -81,8 +89,14 @@ LinkGrabberAudioProcessorEditor::LinkGrabberAudioProcessorEditor(LinkGrabberAudi
     addChildComponent(historyList);
     addChildComponent(resultTile);
 
-    setSize(480, 360);
+    linkField.onEscapeKey = [this] { handleEscape(); };
+    noticePanel.onAccept = [this] { acceptNotice(); };
+    addChildComponent(noticePanel);      // last = topmost
+    setWantsKeyboardFocus(true);
+
+    // Fixed size: setSize is the only size source, no host-driven resizing.
     setResizable(false, false);
+    setSize(480, 360);
 
     processorRef.getHistoryStore().reload();
     rebuildHistoryRows();
@@ -92,24 +106,10 @@ LinkGrabberAudioProcessorEditor::LinkGrabberAudioProcessorEditor(LinkGrabberAudi
     mgr.addListener(this);
     applyStatus(mgr.getStatus());
 
-    // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    if (processorRef.wrapperType == juce::AudioProcessor::wrapperType_Standalone
-        && juce::SystemStats::getEnvironmentVariable("LINKGRABBER_SNAPSHOT_DIR", {}).isNotEmpty())  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    {
-        snapshotMode = true;  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-        poller.stopTimer();   // TEMP SNAPSHOT (Phase 3.2): remove after phase
-        juce::Timer::callAfterDelay(1500, [safe = juce::Component::SafePointer<juce::Component>(this)]  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-        {
-            if (auto* self = dynamic_cast<LinkGrabberAudioProcessorEditor*>(safe.getComponent()))  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-                self->runSnapshots();  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-        });
-    }
+    showNotice(! noticeMarkerFile().existsAsFile());
 
-    if (! snapshotMode)
-    {
-        poller.fn = [this] { pollHistory(); };
-        poller.startTimerHz(1);
-    }
+    poller.fn = [this] { pollHistory(); };
+    poller.startTimerHz(1);
 }
 
 LinkGrabberAudioProcessorEditor::~LinkGrabberAudioProcessorEditor()
@@ -154,7 +154,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
     if (st == State::done && s.filePath.isNotEmpty())
     {
         const juce::File f(s.filePath);
-        if (f.existsAsFile() || snapshotMode)  // TEMP SNAPSHOT (Phase 3.2): remove "|| snapshotMode" after phase
+        if (f.existsAsFile())
         {
             tileShown = true;
             donePath = s.filePath;
@@ -185,8 +185,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         {
             const double now = juce::Time::getMillisecondCounterHiRes();
             if (waveStartMs < 0.0) waveStartMs = now;
-            const double prog = waveProgressOverride >= 0.0 ? waveProgressOverride  // TEMP SNAPSHOT (Phase 3.1): remove after phase
-                                                            : juce::jmin(1.0, (now - waveStartMs) / kWaveMs);
+            const double prog = juce::jmin(1.0, (now - waveStartMs) / kWaveMs);
             board.setView(Mode::converting, shownPercent, (int) std::floor(prog * (lgui::TileBoard::cols + 1)), -1);
             break;
         }
@@ -222,13 +221,12 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         }
 
     goButton.setButtonText(viewActive ? "Cancel" : "Download");
-    historyCount = snapshotRowsActive ? snapshotHistoryCount  // TEMP SNAPSHOT (Phase 3.2): remove after phase
-                                      : (int) processorRef.getHistoryStore().getEntries().size();
+    historyCount = (int) processorRef.getHistoryStore().getEntries().size();
     historyBar.setButtonText("History (" + juce::String(historyCount) + ")");
     updatePanelVisibility();
 
     // Timer only while a job is active (also drives the converting sweep and the live elapsed LED).
-    if (viewActive && ! snapshotMode)
+    if (viewActive)
     {
         if (! isTimerRunning()) startTimerHz(kTimerHz);
     }
@@ -272,9 +270,6 @@ void LinkGrabberAudioProcessorEditor::setHistoryExpanded(bool e)
 
 void LinkGrabberAudioProcessorEditor::rebuildHistoryRows()
 {
-    if (snapshotRowsActive)  // TEMP SNAPSHOT (Phase 3.2): remove after phase
-        return;              // TEMP SNAPSHOT (Phase 3.2): remove after phase
-
     const auto& entries = processorRef.getHistoryStore().getEntries();
     std::vector<lgui::HistoryList::Row> rows;
     rows.reserve(entries.size());
@@ -328,8 +323,69 @@ void LinkGrabberAudioProcessorEditor::cancelAndReset()
     applyStatus(s);
 }
 
+void LinkGrabberAudioProcessorEditor::showNotice(bool show)
+{
+    noticeShowing = show;
+    for (juce::Component* c : std::initializer_list<juce::Component*> {
+             &linkField, &pasteButton, &formatBox, &goButton, &finderButton, &historyBar, &smiley, &historyList })
+        c->setEnabled(! show);
+    noticePanel.setVisible(show);
+    if (show)
+    {
+        noticePanel.toFront(false);
+        noticePanel.grabKeyboardFocus();
+    }
+    repaint();
+}
+
+void LinkGrabberAudioProcessorEditor::acceptNotice()
+{
+    const auto marker = noticeMarkerFile();
+    if (marker.getParentDirectory().createDirectory().wasOk())
+        marker.replaceWithText("accepted\n");   // failure ignored: the notice just shows again next time
+    showNotice(false);
+    grabKeyboardFocus();
+}
+
+bool LinkGrabberAudioProcessorEditor::handleEscape()
+{
+    if (noticeShowing)
+        return false;
+    if (viewActive)
+    {
+        cancelAndReset();
+        return true;
+    }
+    if (historyExpanded)
+    {
+        setHistoryExpanded(false);
+        return true;
+    }
+    return false;
+}
+
+bool LinkGrabberAudioProcessorEditor::keyPressed(const juce::KeyPress& k)
+{
+    // Only reached when focus is inside this editor, so host shortcuts are untouched otherwise.
+    if (noticeShowing)
+        return false;
+    if (k == juce::KeyPress::escapeKey)
+        return handleEscape();
+    if (k.getModifiers().isCommandDown() && ! k.getModifiers().isAltDown()
+        && (k.getKeyCode() == 'V' || k.getKeyCode() == 'v'))
+    {
+        const auto text = juce::SystemClipboard::getTextFromClipboard().trim();
+        if (text.isNotEmpty())
+            linkField.setText(text, juce::sendNotificationSync);  // fires onTextChange -> setLink
+        return true;
+    }
+    return false;
+}
+
 void LinkGrabberAudioProcessorEditor::startOrCancel()
 {
+    if (noticeShowing)
+        return;
     if (viewActive)
     {
         cancelAndReset();
@@ -420,90 +476,5 @@ void LinkGrabberAudioProcessorEditor::resized()
     historyBar.setBounds(15, 289, 340, 22);
     historyList.setBounds(15, 107, 450, 174);
     resultTile.setBounds(30, 119, 420, 150);
-}
-
-//==============================================================================
-// TEMP SNAPSHOT (Phase 3.1): remove after phase (whole function)
-void LinkGrabberAudioProcessorEditor::runSnapshots()
-{
-    using State = DownloadManager::State;
-    const juce::File dir(juce::SystemStats::getEnvironmentVariable("LINKGRABBER_SNAPSHOT_DIR", {}));
-    dir.createDirectory();
-
-    struct Case { const char* name; DownloadManager::Status st; double wave; bool link; int extra = 0; };  // extra: TEMP SNAPSHOT (Phase 3.2)
-    juce::uint32 serial = 1000;
-    auto mk = [&serial](State s, int pct, double el)
-    {
-        DownloadManager::Status st;
-        st.state = s; st.percent = pct; st.elapsedSeconds = el; st.jobSerial = ++serial; st.format = "mp3";
-        return st;
-    };
-
-    std::vector<Case> cases;
-    cases.push_back({ "idle", mk(State::idle, 0, 0), -1.0, false });
-    cases.push_back({ "lookingup", mk(State::lookingUp, 0, 1), -1.0, true });
-    cases.push_back({ "downloading-0", mk(State::downloading, 0, 2), -1.0, true });
-    cases.push_back({ "downloading-40", mk(State::downloading, 40, 4), -1.0, true });
-    cases.push_back({ "downloading-72", mk(State::downloading, 72, 7), -1.0, true });
-    cases.push_back({ "converting", mk(State::converting, 100, 10), 0.5, true });
-    {
-        auto st = mk(State::done, 100, 12);
-        st.filePath = juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                          .getChildFile("LinkGrabber").getChildFile("Example Song.mp3").getFullPathName();
-        cases.push_back({ "done", st, -1.0, true });
-    }
-    {
-        auto st = mk(State::error, 35, 5);
-        st.errorKind = DownloadCommand::FailureKind::unavailable;
-        st.errorMessage = DownloadCommand::userMessage(st.errorKind);
-        cases.push_back({ "error-unavailable", st, -1.0, true });
-        auto st2 = mk(State::error, 0, 0);
-        st2.errorKind = DownloadCommand::FailureKind::toolMissing;
-        st2.errorMessage = DownloadCommand::userMessage(st2.errorKind);
-        cases.push_back({ "error-toolmissing", st2, -1.0, true });
-    }
-    cases.push_back({ "link-filled", mk(State::idle, 0, 0), -1.0, true });
-    {   // TEMP SNAPSHOT (Phase 3.2): remove after phase
-        auto st = mk(State::done, 100, 12);
-        st.title = "Example Song Title"; st.bytes = 7549747; st.format = "mp3";
-        st.filePath = "/tmp/linkgrabber-snapshot/Example Song Title.mp3";
-        cases.push_back({ "done-tile", st, -1.0, true, 1 });
-        cases.push_back({ "history-expanded", mk(State::idle, 0, 0), -1.0, true, 2 });
-        cases.push_back({ "history-collapsed-3", mk(State::idle, 0, 0), -1.0, true, 3 });
-    }
-
-    const juce::String link = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-    for (double scale : { 2.0, 1.0 })
-    {
-        for (auto& c : cases)
-        {
-            linkField.setText(std::string_view(c.name) == "idle" ? juce::String() : link, juce::dontSendNotification);
-            waveProgressOverride = c.wave;
-            lastSerial = 0;
-            viewResetSerial = 0;  // TEMP SNAPSHOT (Phase 3.2): remove after phase
-            // TEMP SNAPSHOT (Phase 3.2): remove after phase
-            snapshotRowsActive = (c.extra == 2 || c.extra == 3);
-            snapshotHistoryCount = snapshotRowsActive ? 3 : 0;
-            if (snapshotRowsActive)
-            {
-                historyList.setRows({ { "s1", "Example Song Title", "/tmp/s1.mp3", "mp3", false },
-                                      { "s2", "Another Very Long Track Name That Should Be Truncated With An Ellipsis Somewhere", "/tmp/s2.wav", "wav", false },
-                                      { "s3", "Deleted Track (moved away)", "/tmp/s3.mp3", "mp3", true } });
-                historyList.setSelectedId(c.extra == 2 ? "s1" : "");
-            }
-            else
-                historyList.setRows({});
-            historyExpanded = (c.extra == 2);
-            applyStatus(c.st);
-            auto img = createComponentSnapshot(getLocalBounds(), true, (float) scale);
-            const auto file = dir.getChildFile(juce::String("snap-") + c.name + (scale == 2.0 ? "" : "-1x") + ".png");
-            if (auto out = file.createOutputStream())
-            {
-                out->setPosition(0);
-                out->truncate();
-                juce::PNGImageFormat().writeImageToStream(img, *out);
-            }
-        }
-    }
-    juce::JUCEApplicationBase::quit();
+    noticePanel.setBounds(getLocalBounds());
 }

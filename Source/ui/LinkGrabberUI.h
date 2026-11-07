@@ -613,6 +613,70 @@ namespace lgui
     };
 
     //==========================================================================
+    // First-run rights notice: an in-editor overlay (never a modal OS window). Covers the whole
+    // editor so it swallows all mouse input; the editor disables the controls underneath.
+    class NoticePanel : public juce::Component
+    {
+    public:
+        std::function<void()> onAccept;
+
+        NoticePanel() : okButton("I understand", true)
+        {
+            okButton.onClick = [this] { if (onAccept) onAccept(); };
+            addAndMakeVisible(okButton);
+            setWantsKeyboardFocus(true);
+        }
+
+        static juce::Rectangle<int> panelBounds(juce::Rectangle<int> whole)
+        {
+            return juce::Rectangle<int>(0, 0, 380, 216).withCentre(whole.getCentre());
+        }
+
+        void resized() override
+        {
+            const auto p = panelBounds(getLocalBounds());
+            okButton.setBounds(juce::Rectangle<int>(110, 28).withCentre({ p.getCentreX(), p.getBottom() - 30 }));
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            const auto p = panelBounds(getLocalBounds());
+            g.setColour(kBlack);                    // hard shadow
+            g.fillRect(p.translated(3, 3));
+            drawRaisedButton(g, p, false);
+
+            const juce::Rectangle<int> title(p.getX() + 4, p.getY() + 4, p.getWidth() - 8, 20);
+            g.setColour(kNavy);
+            g.fillRect(title);
+            g.setColour(kLight);
+            g.setFont(makeFont(12.0f, true));
+            g.drawText("LinkGrabber - Before you start", title.reduced(6, 0), juce::Justification::centredLeft, false);
+
+            g.setColour(kBlack);
+            g.setFont(makeFont(12.0f));
+            g.drawFittedText(
+                "LinkGrabber downloads audio from YouTube links you give it. Downloading may violate "
+                "YouTube's Terms of Service and copyright law. Only use it for content you own, that is "
+                "licensed for this use, or that is in the public domain. You are responsible for what you "
+                "download. This tool is intended for personal use.",
+                { p.getX() + 16, title.getBottom() + 12, p.getWidth() - 32, 104 },
+                juce::Justification::topLeft, 8, 1.0f);
+        }
+
+        bool keyPressed(const juce::KeyPress& k) override
+        {
+            if (k == juce::KeyPress::returnKey || k == juce::KeyPress::spaceKey)
+            {
+                if (onAccept) onAccept();
+            }
+            return true;  // modal for keyboard too
+        }
+
+    private:
+        BevelButton okButton;
+    };
+
+    //==========================================================================
     class LinkGrabberLookAndFeel : public juce::LookAndFeel_V4
     {
     public:

@@ -1,8 +1,8 @@
 # LinkGrabber Notes
 
 ## Status
-- **Current Status:** 🚧 Stage 2 (engine phases 2.0-2.3 verified; Logic drag-out confirmed)
-- **Version:** N/A
+- **Current Status:** ✅ Working
+- **Version:** 1.0.0
 - **Type:** Utility (YouTube Audio Downloader)
 
 ## Lifecycle Timeline
@@ -73,3 +73,7 @@ Also record per host: JUCE assertion in Debug (Y/N), any second drag from one ge
 - **2026-11-07 (Stage 3, Phase 3.1 code complete):** Native Minesweeper editor (480x360): LED counters, smiley, link field/Paste/format/Download-Cancel, seeded 16x6 tile board (reveal/wave/clear/mine), status bar, history header label (non-functional), Show in Finder. Spike drag box removed from the editor (processor getSpikeDummyFile left for Phase 3.2). Editor listens to DownloadManager, never owns it; 30 Hz timer only while a job is active. TEMP SNAPSHOT code (env LINKGRABBER_SNAPSHOT_DIR, Standalone only) present until phase verified.
 
 - **2026-11-07 (Stage 3, Phase 3.2 code complete):** Result tile (draggable, real finished file), expandable history list (hand-painted; 22 px rows, OK/Missing, missing rows greyed and not draggable, right-click or Delete removes the row from history only, Show in Finder reveals the selected row), shared `lgui::FileDragSource` (same synchronous drag code as the Phase 2.0 spike). History freshness: reload on editor open, async re-read after downloadFinished (the editor's listener can run before the processor adds the row), 1 Hz `refreshIfChanged` poll for other instances. Phase 2.0 spike dummy-file generator removed from the processor. Production drag NOT yet host-tested (only the Phase 2.0 spike was verified in Logic Pro AU). TEMP SNAPSHOT code (3.1 + 3.2) still present.
+
+- **2026-11-07 (Stage 3, Phase 3.3 Part A code complete):** Windows 95 style first-run rights notice drawn as an in-editor overlay (lgui::NoticePanel; blocks mouse and keys, controls disabled, Download no-op). Acknowledgement stored globally in `~/Library/Application Support/LinkGrabber/notice-accepted-v1` (write failures ignored; notice reappears next time). Keyboard: Enter starts download, Esc cancels active job or collapses history, Cmd/Ctrl+V pastes into link field when focus is elsewhere in the editor. Editor fixed 480x360, setResizable(false,false). Snapshot state `notice` added (TEMP SNAPSHOT 3.3, in-memory only).
+
+- **2026-11-07 (Stage 3, v1.0.0):** Native UI complete (board, result tile, history, drag-out, first-run notice, keyboard), temporary snapshot code removed, pluginval strictness 10 passed (VST3 + AU). Plugin working; installed for DAW testing.

@@ -16,15 +16,20 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress&) override;
 
 private:
+    bool handleEscape();
+    void showNotice(bool show);
+    void acceptNotice();
+
     // DownloadManager::Listener (message thread)
     void downloadStatusChanged(const DownloadManager::Status& s) override { applyStatus(s); }
     void downloadFinished(const DownloadManager::Status& s) override;
 
     void timerCallback() override;
 
-    // Single view-model update used by the real listener, the timer and the snapshot code.
+    // Single view-model update used by the real listener and the timer.
     void applyStatus(const DownloadManager::Status&);
     void startOrCancel();
     void cancelAndReset();
@@ -54,6 +59,8 @@ private:
     lgui::ExpanderBar historyBar;
     lgui::HistoryList historyList;
     lgui::ResultTile resultTile;
+    lgui::NoticePanel noticePanel;      // topmost child (added last)
+    bool noticeShowing = false;
 
     struct Poller : juce::Timer
     {
@@ -76,13 +83,6 @@ private:
     bool historyExpanded = false;
     juce::String donePath;              // finished file shown in the result tile
     bool tileShown = false;
-
-    // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    void runSnapshots();                                          // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    bool snapshotMode = false;                                    // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    double waveProgressOverride = -1.0;                           // TEMP SNAPSHOT (Phase 3.1): remove after phase
-    bool snapshotRowsActive = false;                              // TEMP SNAPSHOT (Phase 3.2): remove after phase
-    int snapshotHistoryCount = 0;                                 // TEMP SNAPSHOT (Phase 3.2): remove after phase
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LinkGrabberAudioProcessorEditor)
 };
