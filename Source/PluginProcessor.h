@@ -2,8 +2,11 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_data_structures/juce_data_structures.h>
 #include "HistoryStore.h"
+#include "DownloadManager.h"
 
-class LinkGrabberAudioProcessor : public juce::AudioProcessor
+
+class LinkGrabberAudioProcessor : public juce::AudioProcessor,
+                                  private DownloadManager::Listener
 {
 public:
     LinkGrabberAudioProcessor();
@@ -49,10 +52,22 @@ public:
     // Global download history (message thread only; never touch from processBlock).
     HistoryStore& getHistoryStore() { return historyStore; }
 
+    // Processor-owned download engine (survives the editor closing). Message thread for
+    // start/cancel/listeners; getStatus() is thread-safe.
+    DownloadManager& getDownloadManager() { return downloadManager; }
+
+    // Message thread. Reads the `format` parameter (0 = MP3 320, 1 = WAV 24-bit), the stored
+    // link and output folder, and starts a job. Returns false if busy or the link is invalid.
+    bool startDownload();
+
     juce::AudioProcessorValueTreeState parameters;
 
 private:
+    // DownloadManager::Listener (message thread): adds finished downloads to the history.
+    void downloadFinished(const DownloadManager::Status& finished) override;
+
     HistoryStore historyStore;  // default directory; no disk access until reload()/add()
+    DownloadManager downloadManager;  // declared after historyStore: destroyed first (joins its worker)
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::ValueTree getOrCreateExtras();

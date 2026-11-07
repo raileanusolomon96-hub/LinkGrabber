@@ -38,13 +38,51 @@ LinkGrabberAudioProcessor::LinkGrabberAudioProcessor()
                         .withInput("Input", juce::AudioChannelSet::stereo(), true)
                         .withOutput("Output", juce::AudioChannelSet::stereo(), true))
     , parameters(*this, nullptr, "Parameters", createParameterLayout())
+    , historyStore()
 {
     getOrCreateExtras();
 
+    downloadManager.addListener(this);
 }
 
 LinkGrabberAudioProcessor::~LinkGrabberAudioProcessor()
 {
+    downloadManager.removeListener(this);
+}
+
+bool LinkGrabberAudioProcessor::startDownload()
+{
+    JUCE_ASSERT_MESSAGE_THREAD
+
+    // `format` is read here, on the message thread, at start time. Changing it later does not
+    // affect the running job (the manager copies it).
+    int formatIndex = 0;
+    if (auto* raw = parameters.getRawParameterValue("format"))
+        formatIndex = juce::roundToInt(raw->load());
+
+    return downloadManager.start(LinkGrabberState::sanitiseLink(getLink()), formatIndex, getOutputFolder());
+}
+
+void LinkGrabberAudioProcessor::downloadFinished(const DownloadManager::Status& finished)
+{
+    // Message thread (AsyncUpdater). The worker never touches the history.
+    if (finished.state != DownloadManager::State::done)
+        return;
+
+    const juce::File file(finished.filePath);
+    if (! file.existsAsFile())
+        return;
+
+    HistoryEntry entry;
+    entry.id = finished.videoId.isNotEmpty()
+                   ? finished.videoId
+                   : "lg-" + juce::String::toHexString(juce::Time::currentTimeMillis());
+    entry.title = finished.title.isNotEmpty() ? finished.title : file.getFileNameWithoutExtension();
+    entry.path = file.getFullPathName();
+    entry.format = finished.format;
+    entry.timestamp = juce::Time::getCurrentTime().toISO8601(true);
+    entry.bytes = file.getSize();
+    historyStore.add(entry);
 }
 
 void LinkGrabberAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)

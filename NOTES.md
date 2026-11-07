@@ -17,6 +17,8 @@
 
 - **2026-11-07 (Stage 2.1):** State and History Store code written (`HistoryStore.h`, `StateSanitiser.h`, sanitising in `setStateInformation`, `getHistoryStore()`), plus a temporary env-driven self-test (`TempStateSelfTest.h`). Build and self-test run pending; TEMP SELFTEST code to be removed after the phase.
 
+- **2026-11-07 (Stage 2.2):** Tools, command, parser and Download Manager code written (`DownloadCommand.h`, `ToolLocator.h`, `DownloadManager.h/.cpp`, `getDownloadManager()`/`startDownload()` on the processor, history entry added on `done`), plus a temporary env-driven self-test (`TempDownloadSelfTest.h`). Build and self-test run pending; TEMP SELFTEST (Phase 2.2) code to be removed after the phase.
+
 ## Known Issues
 
 None

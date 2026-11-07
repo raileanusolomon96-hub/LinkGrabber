@@ -20,6 +20,7 @@ target_sources(LinkGrabber
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/DownloadManager.cpp
 )
 
 # Include paths
