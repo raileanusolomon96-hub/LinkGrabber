@@ -40,10 +40,12 @@ Dummy file notes: the WAV is real audio (1 s, 440 Hz, 24-bit stereo 44.1 kHz). J
 | Host / format | Drag result (WAV) | Drag result (MP3) | Notes | Date |
 |---------------|-------------------|-------------------|-------|------|
 | Standalone -> Finder | NOT YET TESTED | NOT YET TESTED | | |
-| Logic Pro, AU | NOT YET TESTED | NOT YET TESTED | AU may be hosted out-of-process (AUHostingServiceXPC); most uncertain case | |
+| Logic Pro, AU | WORKS (user report) | WORKS (user report) | User confirmed dragging from the plugin into Logic works; WAV vs MP3 not separately reported. Release build, not Debug | 2026-11-07 |
 | Ableton Live, VST3 | NOT YET TESTED | NOT YET TESTED | | |
 | Ableton Live, AU | NOT YET TESTED | NOT YET TESTED | | |
 | Reaper, VST3 | NOT YET TESTED | NOT YET TESTED | | |
 | Reaper, AU | NOT YET TESTED | NOT YET TESTED | | |
 
 Also record per host: JUCE assertion in Debug (Y/N), any second drag from one gesture (Y/N), whether "Show in Finder" fallback was needed.
+
+- **2026-11-07 (Stage 2, Phase 2.0):** Drag-out confirmed working in Logic Pro (AU) by user. Other hosts untested; risk R1 retired for the primary host.
