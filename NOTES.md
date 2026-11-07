@@ -69,3 +69,5 @@ Also record per host: JUCE assertion in Debug (Y/N), any second drag from one ge
 - **2026-11-07 (Stage 2, Phase 2.0):** Drag-out confirmed working in Logic Pro (AU) by user. Other hosts untested; risk R1 retired for the primary host.
 
 - **2026-11-07 (Stage 2.3 verified):** Hardening verified: unit, fake, log, repeat, cancel during download, cancel during conversion (no ffmpeg survivor), 10x create/destroy mid-job (worst destructor 34 ms), no strays or zombies. Fixed during testing: extractVideoIdFromLink path segments (leading empty token). Temporary self-test removed.
+
+- **2026-11-07 (Stage 3, Phase 3.1 code complete):** Native Minesweeper editor (480x360): LED counters, smiley, link field/Paste/format/Download-Cancel, seeded 16x6 tile board (reveal/wave/clear/mine), status bar, history header label (non-functional), Show in Finder. Spike drag box removed from the editor (processor getSpikeDummyFile left for Phase 3.2). Editor listens to DownloadManager, never owns it; 30 Hz timer only while a job is active. TEMP SNAPSHOT code (env LINKGRABBER_SNAPSHOT_DIR, Standalone only) present until phase verified.
