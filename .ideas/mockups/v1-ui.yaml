@@ -176,3 +176,8 @@ behavior:
   led_elapsed: "seconds since job start; stops at done/error"
   timer: "30 Hz juce::Timer only while a job is active or animation playing"
   format_param_message: '{ "type": "parameter", "id": "format", "value": 0|1 }'
+
+# Finalization metadata
+finalized: true
+finalized_at: 2026-11-07T14:53:03Z
+finalized_by_phase: 5.5

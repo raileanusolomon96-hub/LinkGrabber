@@ -25,14 +25,14 @@ LinkGrabber has no audio-processing parameters (audio in = audio out). Its state
 
 ## UI Concept
 
-**Layout:** Single-window Minesweeper-style board with a link entry field, format selector, and a download history list.
-**Visual Style:** Minesweeper (classic grid tiles, counters, smiley/status face).
+**Layout:** Fixed 480x360 window (v1 mockup). Top bar with progress LED, smiley and elapsed-seconds LED; link row (link field, Paste, format selector, Download/Cancel); 16x6 Minesweeper board; collapsible download history with Show in Finder; status bar.
+**Visual Style:** Classic Windows 95 Minesweeper: #c0c0c0 beveled tiles, red-on-black 7-segment LEDs, yellow smiley (idle, working, sunglasses when done, dead on error).
 **Key Elements:**
 - Link input (paste a YouTube URL)
-- Format toggle (MP3 320 / WAV 24-bit)
-- Progress grid: download and conversion progress reveal tiles; completion clears the board
-- Draggable result item for the finished file (drag to DAW)
-- Download history list; past downloads can be re-dragged later
+- Format selector (MP3 320 / WAV 24-bit)
+- Progress grid: download reveals tiles, conversion sweeps a wave, errors turn a tile into a mine; completion clears the board into a draggable file tile
+- Draggable result tile and draggable history rows (drag to DAW)
+- Implemented natively in JUCE; the mockup (mockups/v1-ui.yaml) is the pixel spec
 
 ## Use Cases
 
