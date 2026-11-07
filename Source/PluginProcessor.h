@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_data_structures/juce_data_structures.h>
+#include "HistoryStore.h"
 
 class LinkGrabberAudioProcessor : public juce::AudioProcessor
 {
@@ -45,9 +46,14 @@ public:
     // encoder and the plugin must not shell out). Returns File() on failure.
     juce::File getSpikeDummyFile(bool wav);
 
+    // Global download history (message thread only; never touch from processBlock).
+    HistoryStore& getHistoryStore() { return historyStore; }
+
     juce::AudioProcessorValueTreeState parameters;
 
 private:
+    HistoryStore historyStore;  // default directory; no disk access until reload()/add()
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::ValueTree getOrCreateExtras();
     juce::ValueTree getExtrasConst() const;

@@ -15,6 +15,8 @@
 
 - **2026-11-07 (Stage 2.0):** Drag-out spike code written (temporary `FileHandle` in the placeholder editor, dummy WAV/MP3 generation, Show in Finder). Host tests pending.
 
+- **2026-11-07 (Stage 2.1):** State and History Store code written (`HistoryStore.h`, `StateSanitiser.h`, sanitising in `setStateInformation`, `getHistoryStore()`), plus a temporary env-driven self-test (`TempStateSelfTest.h`). Build and self-test run pending; TEMP SELFTEST code to be removed after the phase.
+
 ## Known Issues
 
 None

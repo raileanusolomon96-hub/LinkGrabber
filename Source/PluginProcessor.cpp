@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <cmath>
+#include "StateSanitiser.h"
 
 namespace
 {
@@ -39,6 +40,7 @@ LinkGrabberAudioProcessor::LinkGrabberAudioProcessor()
     , parameters(*this, nullptr, "Parameters", createParameterLayout())
 {
     getOrCreateExtras();
+
 }
 
 LinkGrabberAudioProcessor::~LinkGrabberAudioProcessor()
@@ -197,7 +199,16 @@ void LinkGrabberAudioProcessor::setStateInformation(const void* data, int sizeIn
     if (xmlState != nullptr && xmlState->hasTagName(parameters.state.getType()))
     {
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
-        getOrCreateExtras();  // older/partial state: make sure extras exist with defaults
+        auto extras = getOrCreateExtras();  // older/partial state: make sure extras exist with defaults
+
+        // A restored session is untrusted input: sanitise before anything uses it.
+        extras.setProperty(outputFolderProp,
+                           LinkGrabberState::sanitiseOutputFolder(extras.getProperty(outputFolderProp).toString(),
+                                                                  defaultOutputFolder()),
+                           nullptr);
+        extras.setProperty(linkProp,
+                           LinkGrabberState::sanitiseLink(extras.getProperty(linkProp).toString()),
+                           nullptr);
     }
 }
 
