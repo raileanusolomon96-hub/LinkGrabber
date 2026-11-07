@@ -1,7 +1,7 @@
 # LinkGrabber Notes
 
 ## Status
-- **Current Status:** 🚧 Stage 2 (Phase 2.0 drag-out spike code complete; host tests pending)
+- **Current Status:** 🚧 Stage 2 (engine phases 2.0-2.3 verified; Logic drag-out confirmed)
 - **Version:** N/A
 - **Type:** Utility (YouTube Audio Downloader)
 
