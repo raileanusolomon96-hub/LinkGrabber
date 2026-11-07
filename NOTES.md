@@ -15,9 +15,23 @@
 
 - **2026-11-07 (Stage 2.0):** Drag-out spike code written (temporary `FileHandle` in the placeholder editor, dummy WAV/MP3 generation, Show in Finder). Host tests pending.
 
-- **2026-11-07 (Stage 2.1):** State and History Store code written (`HistoryStore.h`, `StateSanitiser.h`, sanitising in `setStateInformation`, `getHistoryStore()`), plus a temporary env-driven self-test (`TempStateSelfTest.h`). Build and self-test run pending; TEMP SELFTEST code to be removed after the phase.
+- **2026-11-07 (Stage 2.1):** State and History Store code written (`HistoryStore.h`, `StateSanitiser.h`, sanitising in `setStateInformation`, `getHistoryStore()`). Self-tests passed; temporary code removed.
 
-- **2026-11-07 (Stage 2.2):** Tools, command, parser and Download Manager code written (`DownloadCommand.h`, `ToolLocator.h`, `DownloadManager.h/.cpp`, `getDownloadManager()`/`startDownload()` on the processor, history entry added on `done`), plus a temporary env-driven self-test (`TempDownloadSelfTest.h`). Build and self-test run pending; TEMP SELFTEST (Phase 2.2) code to be removed after the phase.
+- **2026-11-07 (Stage 2.2):** Tools, command, parser and Download Manager code written (`DownloadCommand.h`, `ToolLocator.h`, `DownloadManager.h/.cpp`, `getDownloadManager()`/`startDownload()` on the processor, history entry added on `done`). Self-tests passed; temporary code removed.2) code to be removed after the phase.
+
+- **2026-11-07 (Stage 2.3):** Hardening code written (build + self-tests verified, temp code removed): `ProcessRunner.h/.cpp` (posix_spawn in its own process group, `killpg` SIGTERM -> 500 ms -> SIGKILL -> waitpid, poll() read timeout) replaces `juce::ChildProcess`; cancel/destroy kill the whole tree (yt-dlp, ffmpeg, deno) and delete the job's partial files (`JobCleanup.h`); new failure kinds `tooLong` (`--match-filter "duration <= 3600"`) and `cannotWrite`; reviewed user messages and classifier; `LogFile.h` (`~/Library/Logs/LinkGrabber.log`, 512 KB cap); re-download resolution. Self-tests passed; temporary code removed.3)` must be removed after the phase.
+
+## Phase 2.3 Behaviour Notes
+
+**Cancel / destroy.** `cancel()` is non-blocking: it sends SIGTERM to the whole process group at once; the worker waits up to 500 ms, then SIGKILLs the group, reaps the leader, deletes partial files and publishes state `idle` with message "Cancelled" (no `downloadFinished` callback, same as before). The destructor does the same and joins the worker (1.5 s, then SIGKILL, then 2.5 s more); typical total is well under 1 s.
+
+**Cleanup rules.** Only direct children of the output folder, never symlinks, only files modified since the job started (-2 s slack). If the video id is known (from the link or yt-dlp's `[youtube] <id>:` line) a file is touched only if its name contains the id; if unknown, only yt-dlp partial suffixes (`.part`, `.ytdl`, `.temp`, `.part-Frag*`, `.temp.<ext>`). Cancel additionally removes `.mp3/.wav/.webm/.m4a/.opus` files with the id (half-written output or the downloaded source). A failed (non-cancel) job removes partial suffixes only. A job that finished `done` is never cleaned.
+
+**Duration guard.** `--match-filter "duration <= 3600"`. yt-dlp skips a rejected video with exit 0 and no file ("... does not pass filter ..."); the manager maps that to `tooLong` ("Video is longer than 1 hour."). A missing duration (live stream) also fails the filter. `--no-live-from-start` was deliberately not added.
+
+**Log file.** `~/Library/Logs/LinkGrabber.log`, 512 KB cap: when an append would exceed it the oldest part is dropped (newest 256 KB kept, cut at a line boundary). Contains job start (link, id, format), state transitions, classification and the last ~25 tool output lines of a failure. Never environment variables and never the child's argv (it carries `PATH=`). Open/write failures are ignored.
+
+**Re-downloading the same video + format (documented behaviour).** The file name template `%(title).140B [%(id)s].%(ext)s` makes the target name identical, so a repeat download lands on the same path. yt-dlp then either re-downloads the source and re-encodes, or skips ("`[download] ... has already been downloaded`" for the source, "`[ExtractAudio] Post-process file ... exists, skipping`" for the finished target). In the skip case yt-dlp may print no `after_move` path line, or the path of the leftover source (`.webm`). The manager therefore resolves the result in this order, always requiring the requested extension: (1) the printed path (or its sibling with the requested extension), (2) the path from the "Post-process file ... exists" line, (3) the sibling of the "has already been downloaded" path, (4) newest file of that format modified since the job started, (5) any file of that format whose name contains the video id. The job then ends `done` with the SAME path, and the history row is replaced (the history key is id + path), not duplicated. Known side effect: in the skip case yt-dlp may leave the downloaded source (`.webm`/`.m4a`) next to the audio file; the plugin does not delete files of a job that finished `done`.
 
 ## Known Issues
 
@@ -53,3 +67,5 @@ Dummy file notes: the WAV is real audio (1 s, 440 Hz, 24-bit stereo 44.1 kHz). J
 Also record per host: JUCE assertion in Debug (Y/N), any second drag from one gesture (Y/N), whether "Show in Finder" fallback was needed.
 
 - **2026-11-07 (Stage 2, Phase 2.0):** Drag-out confirmed working in Logic Pro (AU) by user. Other hosts untested; risk R1 retired for the primary host.
+
+- **2026-11-07 (Stage 2.3 verified):** Hardening verified: unit, fake, log, repeat, cancel during download, cancel during conversion (no ffmpeg survivor), 10x create/destroy mid-job (worst destructor 34 ms), no strays or zombies. Fixed during testing: extractVideoIdFromLink path segments (leading empty token). Temporary self-test removed.

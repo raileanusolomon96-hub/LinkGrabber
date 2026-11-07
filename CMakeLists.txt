@@ -21,6 +21,7 @@ target_sources(LinkGrabber
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/DownloadManager.cpp
+        Source/ProcessRunner.cpp
 )
 
 # Include paths

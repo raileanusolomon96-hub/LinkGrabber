@@ -22,7 +22,8 @@ namespace DownloadCommand
     inline juce::String extensionFor(Format f) { return f == Format::wav ? ".wav" : ".mp3"; }
 
     //==========================================================================
-    enum class FailureKind { none, invalidLink, unavailable, network, outdated, toolMissing, generic };
+    enum class FailureKind { none, invalidLink, unavailable, network, outdated, toolMissing, generic,
+                             tooLong, cannotWrite };
 
     inline const char* kindName(FailureKind k)
     {
@@ -35,24 +36,35 @@ namespace DownloadCommand
             case FailureKind::outdated:    return "outdated";
             case FailureKind::toolMissing: return "toolMissing";
             case FailureKind::generic:     return "generic";
+            case FailureKind::tooLong:     return "tooLong";
+            case FailureKind::cannotWrite: return "cannotWrite";
         }
         return "generic";
     }
 
-    // User-facing messages (architecture.md "Failure mapping"). The UI never shows raw tool output.
+    // Duration guard (--match-filter): videos longer than this are skipped by yt-dlp.
+    inline constexpr int maxDurationSeconds = 3600;
+
+    // Shown when the user cancels (state idle, errorKind none) or the plugin is destroyed mid-job.
+    inline juce::String cancelledMessage() { return "Cancelled"; }
+
+    // User-facing messages (architecture.md "Failure mapping"). Short, plain language, each says
+    // what to do next. The UI never shows raw tool output; details go to LinkGrabber.log.
     inline juce::String userMessage(FailureKind k)
     {
         switch (k)
         {
             case FailureKind::none:        return {};
-            case FailureKind::invalidLink: return "Invalid link: paste a YouTube URL";
-            case FailureKind::unavailable: return "Video unavailable, private or age-restricted";
-            case FailureKind::network:     return "Network error: check your connection";
-            case FailureKind::outdated:    return "YouTube changed: update yt-dlp";
-            case FailureKind::toolMissing: return "yt-dlp or ffmpeg not found";
-            case FailureKind::generic:     return "Download failed (see log)";
+            case FailureKind::invalidLink: return "Invalid link: paste a YouTube video URL";
+            case FailureKind::unavailable: return "Video unavailable: private, removed, region-locked or age-restricted";
+            case FailureKind::network:     return "Network error: check your internet connection and try again";
+            case FailureKind::outdated:    return "YouTube changed: update yt-dlp and try again";
+            case FailureKind::toolMissing: return "yt-dlp or ffmpeg not found: install them first";
+            case FailureKind::generic:     return "Download failed: see LinkGrabber.log in Library/Logs";
+            case FailureKind::tooLong:     return "Video is longer than 1 hour.";
+            case FailureKind::cannotWrite: return "Cannot write to the output folder: check free space and permissions";
         }
-        return "Download failed (see log)";
+        return "Download failed: see LinkGrabber.log in Library/Logs";
     }
 
     //==========================================================================
@@ -117,6 +129,11 @@ namespace DownloadCommand
                                        "--output", "%(title).140B [%(id)s].%(ext)s",
                                        "-x" });
 
+        // Duration guard (Phase 2.3): a missing duration (live stream) also fails the filter,
+        // which is intended. Skipped videos exit 0 without a file -> FailureKind::tooLong.
+        a.add("--match-filter");
+        a.add("duration <= " + juce::String(maxDurationSeconds));
+
         if (format == Format::wav)
             a.addArray(juce::StringArray { "--audio-format", "wav",
                                            "--postprocessor-args", "ffmpeg:-c:a pcm_s24le -ac 2" });
@@ -152,6 +169,45 @@ namespace DownloadCommand
             if (! (juce::CharacterFunctions::isLetterOrDigit(c) && c < 128) && c != '-' && c != '_')
                 return false;
         return true;
+    }
+
+    // Best-effort video id from an (already validated) link: youtu.be/<id>, /watch?v=<id>,
+    // /shorts/<id>, /live/<id>, /embed/<id>, /v/<id>. Empty if it cannot be determined.
+    // Used to scope cancel cleanup to files of THIS job before yt-dlp has printed the id.
+    inline juce::String extractVideoIdFromLink(const juce::String& link)
+    {
+        const auto afterScheme = link.fromFirstOccurrenceOf("://", false, false);
+        const int hostEnd = afterScheme.indexOfAnyOf("/?#");
+        const auto host = (hostEnd < 0 ? afterScheme : afterScheme.substring(0, hostEnd)).toLowerCase();
+        if (hostEnd < 0)
+            return {};
+
+        auto remainder = afterScheme.substring(hostEnd).upToFirstOccurrenceOf("#", false, false);
+        const auto pathPart = remainder.upToFirstOccurrenceOf("?", false, false);
+        const auto query = remainder.containsChar('?') ? remainder.fromFirstOccurrenceOf("?", false, false)
+                                                       : juce::String();
+        auto segments = juce::StringArray::fromTokens(pathPart, "/", "");
+        segments.removeEmptyStrings();
+
+        juce::String candidate;
+        if (host == "youtu.be")
+        {
+            if (segments.size() >= 1)
+                candidate = segments[0];
+        }
+        else if (segments.size() >= 2 && (segments[0] == "shorts" || segments[0] == "live"
+                                          || segments[0] == "embed" || segments[0] == "v"))
+        {
+            candidate = segments[1];
+        }
+        else if (segments.size() >= 1 && segments[0] == "watch")
+        {
+            for (const auto& pair : juce::StringArray::fromTokens(query, "&", ""))
+                if (pair.startsWith("v="))
+                    candidate = pair.substring(2);
+        }
+
+        return isPlausibleVideoId(candidate) ? candidate : juce::String();
     }
 
     // "<title> [<id>].<ext>" -> title + id (id empty if the pattern is absent).
@@ -217,11 +273,19 @@ namespace DownloadCommand
         const juce::String& getVideoId() const      { return videoId; }
         const juce::StringArray& getTail() const    { return tail; }
 
+        // Re-download case (the file already exists):
+        //   "[ExtractAudio] Post-process file <abs> exists, skipping"  -> the finished target
+        //   "[download] <abs> has already been downloaded"             -> the source download
+        // yt-dlp may then print no after_move path line (or a stale source path), so the
+        // manager uses these to resolve the existing file.
+        const juce::String& getPostProcessExistingPath() const { return postProcessExisting; }
+        const juce::String& getAlreadyDownloadedPath() const   { return alreadyDownloaded; }
+
     private:
         std::string pending;
         int percent = 0;
         bool converting = false;
-        juce::String finalPath, videoId;
+        juce::String finalPath, videoId, postProcessExisting, alreadyDownloaded;
         juce::StringArray tail;
 
         void flushPending()
@@ -255,6 +319,28 @@ namespace DownloadCommand
             while (tail.size() > maxTailLines)
                 tail.remove(0);
 
+            {
+                static const juce::String ppPrefix("Post-process file ");
+                static const juce::String ppSuffix(" exists, skipping");
+                static const juce::String dlSuffix(" has already been downloaded");
+
+                const int a = line.indexOf(ppPrefix);
+                const int b = line.lastIndexOf(ppSuffix);
+                if (a >= 0 && b > a)
+                {
+                    const auto p = line.substring(a + ppPrefix.length(), b).trim();
+                    if (juce::File::isAbsolutePath(p))
+                        postProcessExisting = p;
+                }
+
+                if (line.startsWith("[download] ") && line.endsWith(dlSuffix))
+                {
+                    const auto p = line.substring(11, line.length() - dlSuffix.length()).trim();
+                    if (juce::File::isAbsolutePath(p))
+                        alreadyDownloaded = p;
+                }
+            }
+
             if (line.startsWith("[ExtractAudio]") || line.startsWith("[Merger]")
                 || line.startsWith("[VideoConvertor]") || line.startsWith("[ffmpeg]")
                 || line.startsWith("[Fixup"))
@@ -282,8 +368,21 @@ namespace DownloadCommand
     //==========================================================================
     // Failure classifier. `tail` = last output lines. ERROR: lines are preferred over the
     // whole tail so a harmless WARNING cannot decide the outcome.
+    // True if yt-dlp skipped the video because of --match-filter ("... does not pass filter
+    // (duration <= 3600), skipping .."). That run exits 0 and produces no file.
+    inline bool looksLikeFilterSkip(const juce::StringArray& tail)
+    {
+        for (const auto& l : tail)
+            if (l.containsIgnoreCase("does not pass filter"))
+                return true;
+        return false;
+    }
+
     inline FailureKind classifyFailure(const juce::StringArray& tail)
     {
+        if (looksLikeFilterSkip(tail))
+            return FailureKind::tooLong;
+
         juce::String text;
         for (const auto& l : tail)
             if (l.startsWithIgnoreCase("ERROR:"))
@@ -311,19 +410,29 @@ namespace DownloadCommand
                 return FailureKind::toolMissing;
         }
 
-        if (any({ "private video", "video unavailable", "video is unavailable", "video is not available",
+        // Local write problems first: "permission denied" must not fall into the generic bucket.
+        if (any({ "no space left on device", "disk full", "not enough space", "read-only file system",
+                  "permission denied", "operation not permitted", "errno 28", "errno 13", "errno 30" }))
+            return FailureKind::cannotWrite;
+
+        if (any({ "private video", "this video is private", "video unavailable", "video is unavailable",
+                  "video is not available", "this video is not available", "no longer available",
                   "members-only", "members only", "join this channel", "not available in your country",
-                  "age-restricted", "age restricted", "confirm your age", "has been removed",
-                  "removed by the uploader", "account associated with this video has been terminated" }))
+                  "not made this video available", "blocked it", "age-restricted", "age restricted",
+                  "confirm your age", "has been removed", "removed by the uploader",
+                  "account associated with this video has been terminated", "live event will begin",
+                  "premieres in", "copyright grounds" }))
             return FailureKind::unavailable;
 
-        if (any({ "not a bot", "http error 403", "unable to extract", " nsig", "n challenge",
-                  "no supported javascript runtime", "requested format is not available" }))
+        if (any({ "sign in to confirm", "not a bot", "http error 403", "unable to extract", "failed to extract",
+                  " nsig", "n challenge", "challenge solving failed", "signature extraction",
+                  "no supported javascript runtime", "requested format is not available",
+                  "no video formats found", "po token", "po_token" }))
             return FailureKind::outdated;
 
         if (any({ "getaddrinfo", "temporary failure", "network is unreachable", "timed out",
                   "unable to download webpage", "nodename nor servname", "name or service not known",
-                  "connection" }))
+                  "failed to resolve", "no route to host", "urlopen error", "offline", "connection" }))
             return FailureKind::network;
 
         return FailureKind::generic;

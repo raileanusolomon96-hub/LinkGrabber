@@ -1,6 +1,18 @@
 #include "DownloadManager.h"
+#include "JobCleanup.h"
+#include "LogFile.h"
 
 using namespace DownloadCommand;
+
+namespace
+{
+    constexpr int pollTimeoutMs = 100;          // how quickly the worker notices a cancel
+    constexpr int killGraceMs = 500;            // SIGTERM -> SIGKILL
+    constexpr int normalExitWaitMs = 15000;     // leader still alive after EOF
+    constexpr int leaderGoneDrainMs = 2000;     // leader exited but a helper still holds the pipe
+
+    juce::String jobTag(juce::uint32 serial) { return "job #" + juce::String(serial); }
+}
 
 DownloadManager::DownloadManager()
     : juce::Thread("LinkGrabber download")
@@ -9,12 +21,20 @@ DownloadManager::DownloadManager()
 
 DownloadManager::~DownloadManager()
 {
-    // Destruction order (architecture.md): cancel the job, kill the child, join the worker,
-    // cancel the pending async update. Listeners are released last (member destruction).
+    // Destruction order (architecture.md): cancel the job, kill the whole process group, join
+    // the worker (bounded), cancel the pending async update. Listeners are released last.
+    // The worker removes the partial files itself while it winds down.
     cancelRequested.store(true);
     signalThreadShouldExit();
-    killChild();
-    stopThread(8000);
+    signalChild(false);                       // SIGTERM to the group, non-blocking
+
+    if (! waitForThreadToExit(1500))
+    {
+        signalChild(true);                    // SIGKILL to the group
+        if (! waitForThreadToExit(2500))
+            stopThread(1000);                 // last resort; never expected to be reached
+    }
+
     cancelPendingUpdate();
 }
 
@@ -67,7 +87,8 @@ bool DownloadManager::start(const juce::String& link, int formatIndex, const juc
     // Validation is pure and cheap: an invalid link never spawns anything (not even the worker).
     if (! isValidLink(trimmed))
     {
-        publishError(FailureKind::invalidLink, userMessage(FailureKind::invalidLink));
+        publishError(FailureKind::invalidLink, userMessage(FailureKind::invalidLink),
+                     "rejected link: " + trimmed.substring(0, 200));
         return false;
     }
 
@@ -76,6 +97,11 @@ bool DownloadManager::start(const juce::String& link, int formatIndex, const juc
     job.format = format;
     job.searchDirs = useSearchOverride ? searchOverride : ToolLocator::getDefaultSearchDirs();
     job.startTime = juce::Time::getCurrentTime();
+    job.linkVideoId = extractVideoIdFromLink(trimmed);
+
+    LogFile::append(jobTag(serialCounter) + " start format=" + formatName(format)
+                    + " id=" + (job.linkVideoId.isNotEmpty() ? job.linkVideoId : juce::String("?"))
+                    + " link=" + trimmed.substring(0, 300));
 
     cancelRequested.store(false);
     busy.store(true);
@@ -91,14 +117,19 @@ void DownloadManager::cancel()
     if (! busy.load())
         return;
     cancelRequested.store(true);
-    killChild();
+    signalChild(false);   // immediate SIGTERM to the group; the worker escalates and cleans up
 }
 
-void DownloadManager::killChild()
+void DownloadManager::signalChild(bool force)
 {
     const juce::ScopedLock sl(childLock);
-    if (activeChild != nullptr)
-        activeChild->kill();
+    if (activeRunner != nullptr)
+    {
+        if (force)
+            activeRunner->forceKill();
+        else
+            activeRunner->requestTerminate();
+    }
 }
 
 //==============================================================================
@@ -117,12 +148,38 @@ void DownloadManager::publish(const std::function<void(Status&)>& mutate, bool f
 
 void DownloadManager::publishError(FailureKind kind, const juce::String& message, const juce::String& detail)
 {
+    // Diagnostics go to the log (links + tool output tail + classification; never the environment).
+    juce::StringArray body;
+    if (detail.isNotEmpty())
+        body = juce::StringArray::fromLines(detail);
+    LogFile::appendBlock(jobTag(getStatus().jobSerial) + " error kind=" + kindName(kind)
+                             + " message=\"" + message + "\"",
+                         body);
+
     publish([&](Status& s)
             {
                 s.state = State::error;
                 s.errorKind = kind;
                 s.errorMessage = message;
                 s.detail = detail;
+            },
+            true);
+}
+
+void DownloadManager::finishCancelled(const juce::File& outDir, const juce::String& videoId)
+{
+    // Cancelled or destroyed mid-job: the job did not finish, so its leftovers go.
+    const auto removed = JobCleanup::cleanup(outDir, videoId, job.startTime, true);
+
+    LogFile::appendBlock(jobTag(getStatus().jobSerial) + " cancelled, removed "
+                             + juce::String(removed.deleted) + " partial file(s)",
+                         removed.names);
+
+    publish([](Status& s)
+            {
+                s.state = State::idle;
+                s.errorKind = FailureKind::none;
+                s.errorMessage = cancelledMessage();
             },
             true);
 }
@@ -143,6 +200,8 @@ void DownloadManager::handleAsyncUpdate()
 //==============================================================================
 juce::File DownloadManager::resolveFinalFile(const OutputParser& parser, const juce::File& outDir) const
 {
+    const auto ext = extensionFor(job.format);
+
     auto isDirectChild = [&outDir](const juce::File& f)
     {
         const auto parent = f.getParentDirectory();
@@ -152,16 +211,43 @@ juce::File DownloadManager::resolveFinalFile(const OutputParser& parser, const j
         return idA != 0 && idA == outDir.getFileIdentifier();
     };
 
-    // 1. The path yt-dlp printed (--print after_move:filepath), if it is an existing file in the output folder.
+    auto acceptable = [&](const juce::File& f)
+    {
+        return f.existsAsFile() && isDirectChild(f) && f.getFileName().endsWithIgnoreCase(ext);
+    };
+
+    // 1. The path yt-dlp printed (--print after_move:filepath). On a re-download yt-dlp can print
+    //    the source file (.webm) instead; its sibling with the requested extension is the result.
     if (parser.getFinalPath().isNotEmpty())
     {
         const juce::File f(parser.getFinalPath());
-        if (f.existsAsFile() && isDirectChild(f))
+        if (acceptable(f))
+            return f;
+        if (f.existsAsFile() || f.getParentDirectory() == outDir)
+        {
+            const auto sibling = f.withFileExtension(ext);
+            if (acceptable(sibling))
+                return sibling;
+        }
+    }
+
+    // 2. Re-download with the target already present: "Post-process file <abs> exists, skipping".
+    if (parser.getPostProcessExistingPath().isNotEmpty())
+    {
+        const juce::File f(parser.getPostProcessExistingPath());
+        if (acceptable(f))
             return f;
     }
 
-    // 2. Fallback: newest .mp3/.wav (matching the requested format) modified since the job started.
-    const auto ext = extensionFor(job.format);
+    // 3. "[download] <abs> has already been downloaded" -> sibling with the requested extension.
+    if (parser.getAlreadyDownloadedPath().isNotEmpty())
+    {
+        const auto sibling = juce::File(parser.getAlreadyDownloadedPath()).withFileExtension(ext);
+        if (acceptable(sibling))
+            return sibling;
+    }
+
+    // 4. Fallback: newest file of the requested format modified since the job started.
     const auto threshold = job.startTime - juce::RelativeTime::seconds(2.0);
 
     juce::File best;
@@ -175,16 +261,35 @@ juce::File DownloadManager::resolveFinalFile(const OutputParser& parser, const j
             bestTime = t;
         }
     }
+    if (best != juce::File())
+        return best;
+
+    // 5. Last resort for a pure re-download (nothing new written): the file of this video id.
+    const auto id = parser.getVideoId().isNotEmpty() ? parser.getVideoId() : job.linkVideoId;
+    if (id.isNotEmpty())
+    {
+        for (const auto& f : outDir.findChildFiles(juce::File::findFiles, false, "*[" + id + "]*" + ext))
+        {
+            const auto t = f.getLastModificationTime();
+            if (best == juce::File() || t > bestTime)
+            {
+                best = f;
+                bestTime = t;
+            }
+        }
+    }
     return best;
 }
 
 //==============================================================================
 void DownloadManager::run()
 {
-    // Worker thread. Touches only: job (read-only), the snapshot (publish), the child.
+    // Worker thread. Touches only: job (read-only), the snapshot (publish), the log, the child.
+    const juce::File outDir(job.outputFolder);
+
     if (threadShouldExit() || cancelRequested.load())
     {
-        publish([](Status& s) { s.state = State::idle; s.errorMessage = "Cancelled"; }, true);
+        finishCancelled(outDir, job.linkVideoId);
         return;
     }
 
@@ -196,10 +301,10 @@ void DownloadManager::run()
         return;
     }
 
-    const juce::File outDir(job.outputFolder);
     if (! outDir.createDirectory().wasOk() || ! outDir.isDirectory() || ! outDir.hasWriteAccess())
     {
-        publishError(FailureKind::generic, "Cannot write to the output folder", job.outputFolder);
+        publishError(FailureKind::cannotWrite, userMessage(FailureKind::cannotWrite),
+                     "output folder not writable: " + job.outputFolder);
         return;
     }
 
@@ -210,8 +315,8 @@ void DownloadManager::run()
                                     job.format,
                                     job.link);
 
-    juce::ChildProcess child;
-    if (! child.start(argv, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+    ProcessRunner runner;
+    if (! runner.start(argv))
     {
         publishError(FailureKind::toolMissing, userMessage(FailureKind::toolMissing), "Could not start /usr/bin/env");
         return;
@@ -219,74 +324,88 @@ void DownloadManager::run()
 
     {
         const juce::ScopedLock sl(childLock);
-        activeChild = &child;
+        activeRunner = &runner;
     }
 
-    // cancel()/destructor may have fired before the child was registered.
+    // cancel()/destructor may have fired before the runner was registered.
     if (cancelRequested.load() || threadShouldExit())
-        child.kill();
+        runner.requestTerminate();
 
     OutputParser parser;
     int lastPercent = -1;
     bool lastConverting = false;
     juce::String lastId;
     char buffer[4096];
+    double leaderGoneSince = 0.0;
 
     for (;;)
     {
-        // Blocks until data or EOF. Cancel works by kill(): the child dies, EOF follows.
-        const int n = child.readProcessOutput(buffer, static_cast<int>(sizeof(buffer)));
-        if (n <= 0)
-            break;
+        // Returns after at most pollTimeoutMs, so a cancel is noticed quickly even when yt-dlp is silent.
+        const int n = runner.read(buffer, static_cast<int>(sizeof(buffer)), pollTimeoutMs);
 
-        parser.feed(buffer, static_cast<size_t>(n));
+        if (n < 0)
+            break;   // EOF: every writer closed
 
-        const int percent = parser.getPercent();
-        const bool converting = parser.isConverting();
-        const auto id = parser.getVideoId();
-
-        if (percent != lastPercent || converting != lastConverting || id != lastId)
+        if (n > 0)
         {
-            lastPercent = percent;
-            lastConverting = converting;
-            lastId = id;
-            publish([percent, converting, id](Status& s)
-                    {
-                        s.percent = juce::jmax(s.percent, percent);
-                        s.state = converting ? State::converting : (s.percent > 0 ? State::downloading : State::lookingUp);
-                        s.convertingSeen = s.convertingSeen || converting;
-                        if (id.isNotEmpty())
-                            s.videoId = id;
-                    },
-                    false);
+            parser.feed(buffer, static_cast<size_t>(n));
+
+            const int percent = parser.getPercent();
+            const bool converting = parser.isConverting();
+            const auto id = parser.getVideoId();
+
+            if (percent != lastPercent || converting != lastConverting || id != lastId)
+            {
+                lastPercent = percent;
+                lastConverting = converting;
+                lastId = id;
+                publish([percent, converting, id](Status& s)
+                        {
+                            s.percent = juce::jmax(s.percent, percent);
+                            s.state = converting ? State::converting : (s.percent > 0 ? State::downloading : State::lookingUp);
+                            s.convertingSeen = s.convertingSeen || converting;
+                            if (id.isNotEmpty())
+                                s.videoId = id;
+                        },
+                        false);
+            }
+        }
+        else if (runner.hasLeaderExited())
+        {
+            // yt-dlp is gone but something it started still holds the pipe open: give the
+            // remaining output a moment, then stop waiting (finish() kills the leftovers).
+            const auto now = juce::Time::getMillisecondCounterHiRes();
+            if (leaderGoneSince == 0.0)
+                leaderGoneSince = now;
+            else if (now - leaderGoneSince > leaderGoneDrainMs)
+                break;
         }
 
         if (threadShouldExit() || cancelRequested.load())
-            killChild();
+            break;
     }
     parser.finish();
 
-    if (! child.waitForProcessToFinish(15000))
-    {
-        child.kill();
-        child.waitForProcessToFinish(2000);
-    }
+    const bool wasCancelled = cancelRequested.load() || threadShouldExit();
+    const int exitCode = wasCancelled ? runner.killProcessGroup(killGraceMs)
+                                      : runner.finish(normalExitWaitMs);
 
     {
         const juce::ScopedLock sl(childLock);
-        activeChild = nullptr;
+        activeRunner = nullptr;   // the runner is about to go out of scope
     }
 
-    if (cancelRequested.load() || threadShouldExit())
+    const auto knownId = parser.getVideoId().isNotEmpty() ? parser.getVideoId() : job.linkVideoId;
+
+    if (wasCancelled || cancelRequested.load() || threadShouldExit())
     {
-        publish([](Status& s) { s.state = State::idle; s.errorMessage = "Cancelled"; }, true);
+        finishCancelled(outDir, knownId);
         return;
     }
 
-    const int exitCode = static_cast<int>(child.getExitCode());
     const auto tail = parser.getTail().joinIntoString("\n");
 
-    if (exitCode == 0)
+    if (exitCode == 0 || exitCode == ProcessRunner::unknownExitCode)
     {
         const auto file = resolveFinalFile(parser, outDir);
         if (file.existsAsFile())
@@ -296,6 +415,9 @@ void DownloadManager::run()
             const auto videoId = id.isNotEmpty() ? id : parser.getVideoId();
             const auto path = file.getFullPathName();
             const auto bytes = file.getSize();
+
+            LogFile::append(jobTag(getStatus().jobSerial) + " done file=\"" + file.getFileName()
+                            + "\" bytes=" + juce::String(bytes));
 
             publish([&](Status& s)
                     {
@@ -310,13 +432,29 @@ void DownloadManager::run()
             return;
         }
 
-        publishError(FailureKind::generic, "Download finished but no file was found", tail);
+        // yt-dlp exits 0 without a file when --match-filter rejected the video.
+        if (looksLikeFilterSkip(parser.getTail()))
+        {
+            publishError(FailureKind::tooLong, userMessage(FailureKind::tooLong), tail);
+            return;
+        }
+
+        publishError(FailureKind::generic, userMessage(FailureKind::generic),
+                     "finished without a file\n" + tail);
         return;
     }
+
+    // Failed: remove yt-dlp's partial files of this video (never finished media files).
+    const auto removed = JobCleanup::cleanup(outDir, knownId, job.startTime, false);
 
     auto kind = classifyFailure(parser.getTail());
     if (exitCode == 126 || exitCode == 127)
         kind = FailureKind::toolMissing;  // env could not execute the tool
 
-    publishError(kind, userMessage(kind), "exit code " + juce::String(exitCode) + "\n" + tail);
+    auto detail = "exit code " + juce::String(exitCode);
+    if (removed.deleted > 0)
+        detail << "\nremoved " << juce::String(removed.deleted) << " partial file(s)";
+    detail << "\n" << tail;
+
+    publishError(kind, userMessage(kind), detail);
 }
