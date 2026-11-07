@@ -1,0 +1,178 @@
+# LinkGrabber UI mockup v1 - Classic Windows 95 Minesweeper
+# Target implementation: NATIVE JUCE (juce::Graphics), decision D1. No WebView.
+# All coordinates are window-relative pixels, origin top-left. 1px = 1 JUCE logical pixel.
+window:
+  width: 480
+  height: 360
+  resizable: false
+  background: "#c0c0c0"
+  outer_bevel: { style: raised, thickness: 2 }   # white top/left, #808080 bottom/right
+
+controls:            # APVTS-bound parameters only
+  - id: format
+    type: combo
+    position: { x: 295, y: 71 }
+    size: { width: 90, height: 26 }
+    options: ["MP3 320", "WAV 24-bit"]
+    default: "MP3 320"
+    default_index: 0
+    label: "Format"
+    notes: "Non-automatable Choice. Raised bevel button with down-arrow; popup list is a flat white list with 1px black border."
+
+widgets:             # non-parameter UI (state tree / DownloadManager driven)
+  - id: top_bar_panel
+    kind: sunken_panel
+    rect: { x: 15, y: 15, w: 450, h: 48 }
+    border: 2
+  - id: led_percent
+    kind: led_counter
+    rect: { x: 22, y: 22, w: 53, h: 34 }
+    digits: 3
+    range: [0, 100]
+    meaning: download progress percent
+  - id: smiley
+    kind: smiley_button
+    rect: { x: 223, y: 22, w: 34, h: 34 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    face_diameter: 24
+    states: [idle_smile, working_oh, done_sunglasses, error_dead_x]
+    click: reset to idle (cancels job if active)
+  - id: led_elapsed
+    kind: led_counter
+    rect: { x: 405, y: 22, w: 53, h: 34 }
+    digits: 3
+    range: [0, 999]
+    meaning: elapsed seconds of current job (holds at final value after done/error)
+  - id: link_field
+    kind: text_editor
+    rect: { x: 15, y: 71, w: 200, h: 26 }
+    bevel: { style: sunken, thickness: 2 }
+    background: "#ffffff"
+    placeholder: "Paste YouTube link"
+    placeholder_color: "#808080"
+  - id: paste_button
+    kind: button
+    label: "Paste"
+    rect: { x: 225, y: 71, w: 60, h: 26 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+  - id: go_button
+    kind: button
+    label: "Download"
+    label_while_active: "Cancel"
+    rect: { x: 395, y: 71, w: 70, h: 26 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    font_weight: bold
+  - id: board
+    kind: tile_board
+    frame: { x: 15, y: 107, w: 450, h: 174 }
+    frame_bevel: { style: sunken, thickness: 3 }
+    grid: { columns: 16, rows: 6, count: 96 }
+    tile: { size: 27, origin_x: 24, origin_y: 113 }   # tile (c,r) at x=24+27c, y=113+27r; grid 432x162
+    tile_hidden:  { fill: "#c0c0c0", bevel: raised, thickness: 2, light: "#ffffff", dark: "#808080" }
+    tile_revealed: { fill: "#c0c0c0", border: "#808080", border_thickness: 1 }
+    tile_mine: { fill: "#ff0000", border: "#808080", glyph: "black mine: 10px circle + 8 spokes + 2px white highlight" }
+    tile_wave: { fill: "#e6e6e6", note: "converting: front column (1 col wide) of remaining tiles flashes, everything left of it is revealed" }
+    reveal_rule: "downloading reveals floor(percent/100*96*0.75) tiles (max 72 at 100%) in a fixed seeded shuffled order; converting sweeps columns left to right revealing the remaining 24+; error mine = next unrevealed tile in the order"
+    numbers: { font: "bold 16px", colors: { 1: "#0000ff", 2: "#008000", 3: "#ff0000", 4: "#000080" }, distribution: "about 12% of revealed tiles show 1, 6% show 2, 3% show 3; cleared on done" }
+  - id: result_tile
+    kind: draggable_file_tile
+    visible_when: done
+    rect: { x: 30, y: 119, w: 420, h: 150 }
+    bevel: { style: raised, thickness: 3 }
+    fill: "#c0c0c0"
+    grip_icon: { rect: { x: 44, y: 133, w: 28, h: 56 }, dots: "3 cols x 6 rows, 4px dots at 8px pitch, #808080 with 1px #ffffff offset (+1,+1)" }
+    title: { x: 88, y: 133, font: "bold 14px", color: "#000000", ellipsis: true }
+    meta: { x: 88, y: 158, font: "12px", text: "<FORMAT> | <SIZE>", color: "#000000" }
+    drag_strip: { rect: { x: 44, y: 213, w: 392, h: 40 }, border: "2px dashed #000080", fill: "#d8d8f0" , text: "Drag me to your DAW  >>", font: "bold 13px", color: "#000080" }
+    drag_payload: "real file in output folder; performExternalDragDropOfFiles(canMoveFiles=false, source=this) after >=4px move"
+  - id: history_header
+    kind: expander_bar
+    rect: { x: 15, y: 289, w: 340, h: 22 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    label: "History (N)"  # arrow glyph: right when collapsed, down when expanded
+  - id: show_in_finder
+    kind: button
+    label: "Show in Finder"
+    rect: { x: 365, y: 289, w: 100, h: 22 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    action: revealToUser on selected row (or latest entry)
+  - id: history_list
+    kind: scroll_list
+    visible_when: history expanded (overlays the board area)
+    rect: { x: 15, y: 107, w: 450, h: 174 }
+    bevel: { style: sunken, thickness: 2 }
+    background: "#ffffff"
+    row_height: 22
+    columns: { title: "x+8, flexible, ellipsis", format: "right-aligned block 80px wide at x+276", status: "right block 60px at x+366 ('OK' or 'Missing')" }
+    row_selected: { fill: "#000080", text: "#ffffff" }
+    row_missing: { text: "#808080", draggable: false }
+    drag: "each existing row draggable (performExternalDragDropOfFiles)"
+  - id: status_line
+    kind: status_bar
+    rect: { x: 15, y: 321, w: 450, h: 24 }
+    bevel: { style: sunken, thickness: 1 }
+    text_inset: 6
+    font: "12px"
+    colors: { normal: "#000000", error: "#800000" }
+    messages:
+      idle: "Paste a YouTube link, pick a format, then press Download."
+      downloading: "Downloading... NN%"
+      converting: "Converting to <FORMAT>..."
+      done: "Done. Drag the file tile into your DAW."
+      empty_link: "Paste a YouTube link first."
+      invalid_link: "Error: invalid link. Use a youtube.com or youtu.be URL."
+      unavailable: "Error: video unavailable (private, removed or region-locked)."
+      tool_missing: "Error: yt-dlp or ffmpeg not found. Install them and retry."
+      update_ytdlp: "Error: yt-dlp is out of date. Update yt-dlp and retry."
+
+layout_summary:
+  rows_y: { top_bar: "15-63", link_row: "71-97", board: "107-281", history_header: "289-311", status: "321-345" }
+  edge_padding: "15px left/right/top, 15px bottom"
+  gaps: "10px between link-row controls; 8-12px between rows"
+
+styling:
+  colors:
+    background: "#c0c0c0"
+    bevel_light: "#ffffff"
+    bevel_dark: "#808080"
+    bevel_darkest: "#404040"      # outer shadow line for raised buttons (1px) - optional
+    outline: "#000000"
+    desktop_backdrop_test_only: "#008080"
+    led_background: "#000000"
+    led_on: "#ff0000"
+    led_off: "#2a0000"
+    smiley_fill: "#ffff00"
+    smiley_outline: "#000000"
+    link_accent: "#000080"
+    number_1: "#0000ff"
+    number_2: "#008000"
+    number_3: "#ff0000"
+    number_4: "#000080"
+    mine: "#ff0000"
+  bevel_recipe:
+    raised: "fill #c0c0c0; N px top+left lines #ffffff; N px bottom+right lines #808080; 1px #000000 outline only on buttons/smiley"
+    sunken: "fill per widget; N px top+left #808080; N px bottom+right #ffffff"
+  led_digit:
+    size: { w: 13, h: 24 }
+    gap: 3
+    padding: { left: 4, top: 5 }
+    segments: "7 rectangles, thickness 3: a(2,0,9,3) g(2,10,9,3) d(2,21,9,3) f(0,2,3,9) b(10,2,3,9) e(0,12,3,10) c(10,12,3,10)"
+    off_segments: "drawn in #2a0000"
+  smiley:
+    face: "circle d=24 centered in button, fill #ffff00, 1px black outline"
+    idle: "eyes 2x3 black at (-5,-4),(+4,-4) from center; smile arc r=7 below center"
+    working: "same eyes; mouth = black ellipse 5x6 at (0,+5)"
+    done: "sunglasses: black bar 18x4 plus two 7x6 lenses, arms to edge; smile arc"
+    error: "X eyes (3px arms, 2px stroke) at both eye positions; frown arc r=7 above y+8"
+  fonts:
+    primary: "MS Sans Serif, Tahoma, Verdana, sans-serif"
+    juce_hint: "juce::Font(juce::FontOptions(12.0f)) default sans for labels; bold 16 for tile numbers; consider bundling a pixel font (e.g. Pixelated MS Sans Serif) for fidelity"
+    sizes: { label: 12, button: 12, title: 14, tile_number: 16, status: 12 }
+
+behavior:
+  states: [idle, downloading, converting, done, error]
+  smiley_by_state: { idle: smile, downloading: oh, converting: oh, done: sunglasses, error: dead_x }
+  led_percent: "0 idle; percent during downloading; holds 100 during converting and done; holds last value on error"
+  led_elapsed: "seconds since job start; stops at done/error"
+  timer: "30 Hz juce::Timer only while a job is active or animation playing"
+  format_param_message: '{ "type": "parameter", "id": "format", "value": 0|1 }'

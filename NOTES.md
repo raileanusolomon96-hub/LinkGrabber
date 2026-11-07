@@ -9,6 +9,7 @@
 
 - **2026-11-07:** Creative brief created
 - **2026-11-07 (Stage 0):** Research & Planning complete - Architecture and plan documented (Complexity 5.0, phased)
+- **2026-11-07 (Stage 0):** UI mockup v1 created (Minesweeper, 480x360)
 
 ## Known Issues
 
