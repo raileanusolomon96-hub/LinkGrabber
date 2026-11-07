@@ -80,7 +80,7 @@ bool DownloadManager::start(const juce::String& link, int formatIndex, const juc
     cancelRequested.store(false);
     busy.store(true);
 
-    publish([](Status& s) { s.state = State::downloading; }, false);
+    publish([](Status& s) { s.state = State::lookingUp; }, false);
     startThread();
     return true;
 }
@@ -253,7 +253,7 @@ void DownloadManager::run()
             publish([percent, converting, id](Status& s)
                     {
                         s.percent = juce::jmax(s.percent, percent);
-                        s.state = converting ? State::converting : State::downloading;
+                        s.state = converting ? State::converting : (s.percent > 0 ? State::downloading : State::lookingUp);
                         s.convertingSeen = s.convertingSeen || converting;
                         if (id.isNotEmpty())
                             s.videoId = id;

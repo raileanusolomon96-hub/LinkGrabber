@@ -164,7 +164,7 @@ Format to yt-dlp arguments:
 | format | Arguments |
 |--------|-----------|
 | 0 MP3 320 | `-x --audio-format mp3 --audio-quality 320K` |
-| 1 WAV 24-bit | `-x --audio-format wav --postprocessor-args "ffmpeg:-c:a pcm_s24le"` |
+| 1 WAV 24-bit | `-x --audio-format wav --postprocessor-args "ffmpeg:-c:a pcm_s24le -ac 2"` (amended Phase 2.2: `-ac 2` forces stereo, a 5.1 source otherwise gave a 6-channel WAV) |
 
 Non-parameter state (not exposed to the host): `link` (String), `outputFolder` (String), history list (file, global).
 

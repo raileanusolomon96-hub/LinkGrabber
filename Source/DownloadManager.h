@@ -23,7 +23,7 @@ class DownloadManager : private juce::Thread,
                         private juce::AsyncUpdater
 {
 public:
-    enum class State { idle, downloading, converting, done, error };
+    enum class State { idle, lookingUp, downloading, converting, done, error };
 
     struct Status
     {
@@ -40,7 +40,7 @@ public:
         juce::int64 bytes = 0;
         juce::uint32 jobSerial = 0;      // increments per start()
 
-        bool isActive() const noexcept   { return state == State::downloading || state == State::converting; }
+        bool isActive() const noexcept   { return state == State::lookingUp || state == State::downloading || state == State::converting; }
         bool isFinished() const noexcept { return state == State::done || state == State::error; }
     };
 

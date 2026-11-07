@@ -119,7 +119,7 @@ namespace DownloadCommand
 
         if (format == Format::wav)
             a.addArray(juce::StringArray { "--audio-format", "wav",
-                                           "--postprocessor-args", "ffmpeg:-c:a pcm_s24le" });
+                                           "--postprocessor-args", "ffmpeg:-c:a pcm_s24le -ac 2" });
         else
             a.addArray(juce::StringArray { "--audio-format", "mp3", "--audio-quality", "320K" });
 
