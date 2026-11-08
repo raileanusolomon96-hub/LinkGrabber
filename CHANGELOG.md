@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed (after first real-song test)
 - Key profile switched from Krumhansl to Temperley and the confidence cutoffs loosened: on 3 real songs with known keys (F major, F major, Eb minor) Temperley got 3/3, Krumhansl tied on one
 
+- Half/double tempo tie-break now leans toward ~120 BPM instead of ~130: Tomorrow (true 80) reads 80 instead of 160. Trade-off: very fast music (e.g. 174 drum & bass) may read as half (87)
+
 ### Known limits
 - Accuracy verified on synthetic music plus 3 real songs (keys only; BPM not yet checked against known values). Typical errors: relative major/minor, half/double tempo
 - Downloading the same video again replaces the earlier tagged file

@@ -20,6 +20,7 @@
 namespace keybpm
 {
 constexpr double kSampleRate = 22050.0;
+inline double gPriorCentre = 120.0, gPriorSigma = 1.1;   // tempo prior (octave ambiguity tie-break)
 
 struct Result
 {
@@ -184,8 +185,8 @@ inline void estimateBpm(const float* x, std::size_t n, Result& out, CancelFn&& s
         double s = 0.0;
         for (int k = 1; k <= 4; ++k) s += acfAt(lag * k);
         s = std::max(0.0, s);
-        const double oct = std::log2(bpm / 130.0);
-        s *= std::exp(-0.5 * (oct / 1.1) * (oct / 1.1));
+        const double oct = std::log2(bpm / gPriorCentre);
+        s *= std::exp(-0.5 * (oct / gPriorSigma) * (oct / gPriorSigma));
         score[i] = s;
         sum += s;
         if (s > best) { best = s; bestI = i; }
