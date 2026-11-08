@@ -4,6 +4,7 @@ namespace
 {
     constexpr int kTimerHz = 30;
     constexpr double kWaveMs = 2600.0;
+    constexpr double kSweepColMs = 110.0;   // analysing: one column per 110 ms
 
     juce::String formatLabelFor(const juce::String& fmt, const juce::String& fallback)
     {
@@ -132,6 +133,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
         lastSerial = s.jobSerial;
         shownPercent = 0;
         waveStartMs = -1.0;
+        analysingStartMs = -1.0;
         if (s.state != State::idle)
             transientText.clear();
     }
@@ -162,6 +164,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             const juce::String fmt = s.format.equalsIgnoreCase("wav") || f.hasFileExtension("wav") ? "WAV" : "MP3";
             const auto bytes = s.bytes > 0 ? s.bytes : f.getSize();
             resultTile.setInfo(title, fmt + " | " + formatSize(bytes), s.filePath);
+            resultTile.setKeyBpm(s.keyName, s.bpm);
         }
     }
 
@@ -189,7 +192,14 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             board.setView(Mode::converting, shownPercent, (int) std::floor(prog * (lgui::TileBoard::cols + 1)), -1);
             break;
         }
-        case State::analysing:   // Phase 3 UI step adds the sweep band
+        case State::analysing:
+        {
+            const double now = juce::Time::getMillisecondCounterHiRes();
+            if (analysingStartMs < 0.0) analysingStartMs = now;
+            const int col = (int) std::floor((now - analysingStartMs) / kSweepColMs) % (lgui::TileBoard::cols + 1);
+            board.setView(Mode::analysing, 100, col, -1);
+            break;
+        }
         case State::done:        board.setView(Mode::done, 100, -1, -1); break;
         case State::error:       board.setView(Mode::downloading, shownPercent, -1, board.mineTileFor(shownPercent)); break;
     }
@@ -213,8 +223,17 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             case State::converting:  statusText = "Converting to " + formatLabelFor(s.format, formatBox.getText()) + "..."; break;
             case State::analysing:   statusText = "Listening for key and tempo..."; break;
             case State::done:
-                statusText = tileShown ? juce::String("Done. Drag the file tile into your DAW.")
+            {
+                // "Done. A minor, 128 BPM. Drag ..." / "Done. Key and BPM unknown. Drag ..."
+                juce::String found;
+                if (s.keyName.isNotEmpty())
+                    found = s.keyName.replace(" min", " minor").replace(" maj", " major");
+                if (s.bpm > 0)
+                    found << (found.isNotEmpty() ? ", " : "") << s.bpm << " BPM";
+                const auto lead = found.isNotEmpty() ? "Done. " + found + ". " : juce::String("Done. Key and BPM unknown. ");
+                statusText = tileShown ? lead + "Drag the file tile into your DAW."
                                        : "Done. File saved to " + juce::File(s.filePath).getParentDirectory().getFullPathName();
+            }
                 break;
             case State::error:
                 statusText = s.errorMessage.isNotEmpty() ? s.errorMessage : DownloadCommand::userMessage(s.errorKind);
@@ -277,7 +296,7 @@ void LinkGrabberAudioProcessorEditor::rebuildHistoryRows()
     rows.reserve(entries.size());
     for (const auto& e : entries)
         rows.push_back({ e.id, e.title.isNotEmpty() ? e.title : juce::File(e.path).getFileNameWithoutExtension(),
-                         e.path, e.format, HistoryStore::isMissingOnDisk(e) });
+                         e.path, e.format, HistoryStore::isMissingOnDisk(e), e.analysed, e.key, e.bpm });
     historyList.setRows(std::move(rows));
     historyCount = (int) entries.size();
     historyBar.setButtonText("History (" + juce::String(historyCount) + ")");

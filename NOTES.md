@@ -2,7 +2,7 @@
 
 ## Status
 - **Current Status:** ✅ Working
-- **Version:** 1.0.0
+- **Version:** 1.1.0
 - **Type:** Utility (YouTube Audio Downloader)
 
 ## Lifecycle Timeline
@@ -77,3 +77,5 @@ Also record per host: JUCE assertion in Debug (Y/N), any second drag from one ge
 - **2026-11-07 (Stage 3, Phase 3.3 Part A code complete):** Windows 95 style first-run rights notice drawn as an in-editor overlay (lgui::NoticePanel; blocks mouse and keys, controls disabled, Download no-op). Acknowledgement stored globally in `~/Library/Application Support/LinkGrabber/notice-accepted-v1` (write failures ignored; notice reappears next time). Keyboard: Enter starts download, Esc cancels active job or collapses history, Cmd/Ctrl+V pastes into link field when focus is elsewhere in the editor. Editor fixed 480x360, setResizable(false,false). Snapshot state `notice` added (TEMP SNAPSHOT 3.3, in-memory only).
 
 - **2026-11-07 (Stage 3, v1.0.0):** Native UI complete (board, result tile, history, drag-out, first-run notice, keyboard), temporary snapshot code removed, pluginval strictness 10 passed (VST3 + AU). Plugin working; installed for DAW testing.
+
+- **2026-11-08 (v1.1.0):** Key and BPM finder added (brief: .ideas/improvements/key-bpm-finder.md, research: key-bpm-research.md, UI: mockups/v2-ui.yaml). Engine tested standalone (Tests/keybpm_test.cpp) and end-to-end with a fake downloader + real ffmpeg; UI verified from snapshots. Real-song accuracy and DAW use still to be confirmed by the user.

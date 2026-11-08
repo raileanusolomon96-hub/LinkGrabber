@@ -5,6 +5,24 @@ All notable changes to LinkGrabber will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-08
+
+### Added
+- Key and BPM finder: after every download LinkGrabber analyses the audio (ffmpeg decode + built-in analyser, no new tools) and shows the Key (e.g. "A min") and BPM
+- Result tile shows two red LED boxes (KEY, BPM); History rows show Key and BPM columns (old entries stay blank, unknown shows `--`)
+- File name carries the result, e.g. `Title [id] Am 128bpm.wav`; unknown results leave the name unchanged
+- New "analysing" step: sunglasses smiley, sweeping highlight on the board, status "Listening for key and tempo..."
+- Cancel during analysing keeps the downloaded file (untagged) and adds it to History
+
+### Technical Details
+- `Source/KeyBpmAnalyser.h`: plain C++17, own FFT, onset autocorrelation tempo (folded into 70-180, prior near 130) and chroma + Krumhansl key profiles; analyses the middle 3 minutes; never fails a download
+- History entries gain optional `key`, `bpm`, `analysed` fields (backward compatible)
+- Restore point for 1.0.0: git tag `linkgrabber-v1.0.0`
+
+### Known limits
+- Accuracy verified on synthetic music only (Tests/keybpm_test.cpp); real-song accuracy to be confirmed. Typical errors: relative major/minor, half/double tempo
+- Downloading the same video again replaces the earlier tagged file
+
 ## [1.0.0] - 2026-11-07
 
 ### Added

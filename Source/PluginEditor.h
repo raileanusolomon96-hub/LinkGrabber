@@ -74,6 +74,7 @@ private:
     juce::uint32 viewResetSerial = 0;   // statuses of this job are displayed as idle (smiley / cancel)
     int shownPercent = 0;               // monotonic within a job
     double waveStartMs = -1.0;
+    double analysingStartMs = -1.0;     // sweep band phase
     juce::String statusText;
     bool statusIsError = false;
     juce::String transientText;         // local message (empty link, still cancelling)

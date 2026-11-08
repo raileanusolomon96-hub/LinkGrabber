@@ -225,7 +225,7 @@ namespace lgui
     class TileBoard : public juce::Component
     {
     public:
-        enum class Mode { hidden, downloading, converting, done };
+        enum class Mode { hidden, downloading, converting, analysing, done };
         static constexpr int cols = 16, rows = 6, count = 96, ts = 27;
 
         TileBoard()
@@ -279,6 +279,10 @@ namespace lgui
                 switch (mode)
                 {
                     case Mode::done:        revealed = true; break;
+                    case Mode::analysing:   // fully revealed, a 2-column highlight band sweeps left to right
+                        isWave = (c == wave || c == wave + 1);
+                        revealed = ! isWave;
+                        break;
                     case Mode::converting:  revealed = rank[(size_t) t] < revealedN || c < wave; isWave = (c == wave); break;
                     case Mode::downloading: revealed = rank[(size_t) t] < revealedN; break;
                     case Mode::hidden:      break;
@@ -296,7 +300,7 @@ namespace lgui
                     g.setColour(kDark);  g.fillRect(x, y, ts, ts);
                     g.setColour(kFace);  g.fillRect(x + 1, y + 1, ts - 1, ts - 1);
                     const int n = numbers[(size_t) t];
-                    if (mode != Mode::done && n > 0)
+                    if (mode != Mode::done && mode != Mode::analysing && n > 0)
                     {
                         g.setColour(numCol[n - 1]);
                         g.setFont(makeFont(16.0f, true));
@@ -368,10 +372,115 @@ namespace lgui
 
     //==========================================================================
     // Result tile (mockup `result_tile`), local origin = (30,119), size 420x150. Whole tile drags.
+    // Key / BPM LED boxes of the result tile (mockup v2 `led_text_box`).
+    //  - Key: 78x26, six 5x7 dot-matrix characters (2 px cells, pitch 12)
+    //  - BPM: 50x26, three 9x14 seven-segment digits (pitch 12), right-aligned, no zero padding
+    //  - Unknown: dim grey "--" on a near-black cell grid
+    namespace led
+    {
+        inline const juce::Colour kOn { 0xffff0000 }, kOff { 0xff2a0000 };
+        inline const juce::Colour kUnknownOn { 0xff808080 }, kUnknownOff { 0xff161616 };
+
+        inline const char* const* dotGlyph(juce::juce_wchar c)
+        {
+            static const char* const A[7] = { "01110", "10001", "10001", "11111", "10001", "10001", "10001" };
+            static const char* const B[7] = { "11110", "10001", "10001", "11110", "10001", "10001", "11110" };
+            static const char* const C[7] = { "01110", "10001", "10000", "10000", "10000", "10001", "01110" };
+            static const char* const D[7] = { "11110", "10001", "10001", "10001", "10001", "10001", "11110" };
+            static const char* const E[7] = { "11111", "10000", "10000", "11110", "10000", "10000", "11111" };
+            static const char* const F[7] = { "11111", "10000", "10000", "11110", "10000", "10000", "10000" };
+            static const char* const G[7] = { "01110", "10001", "10000", "10111", "10001", "10001", "01111" };
+            static const char* const H[7] = { "01010", "01010", "11111", "01010", "11111", "01010", "01010" };   // '#'
+            static const char* const m[7] = { "00000", "00000", "11010", "10101", "10101", "10101", "10101" };
+            static const char* const a[7] = { "00000", "00000", "01110", "00001", "01111", "10001", "01111" };
+            static const char* const i[7] = { "00100", "00000", "01100", "00100", "00100", "00100", "01110" };
+            static const char* const n[7] = { "00000", "00000", "10110", "11001", "10001", "10001", "10001" };
+            static const char* const j[7] = { "00010", "00000", "00110", "00010", "00010", "10010", "01100" };
+            static const char* const dash[7] = { "00000", "00000", "00000", "11111", "00000", "00000", "00000" };
+            static const char* const blank[7] = { "00000", "00000", "00000", "00000", "00000", "00000", "00000" };
+            switch (c)
+            {
+                case 'A': return A; case 'B': return B; case 'C': return C; case 'D': return D;
+                case 'E': return E; case 'F': return F; case 'G': return G; case '#': return H;
+                case 'm': return m; case 'a': return a; case 'i': return i; case 'n': return n;
+                case 'j': return j; case '-': return dash;
+                default:  return blank;
+            }
+        }
+
+        inline void drawFrame(juce::Graphics& g, juce::Rectangle<int> r)
+        {
+            g.setColour(kBlack);
+            g.fillRect(r);
+            g.setColour(kDark);
+            g.fillRect(r.getX(), r.getY(), r.getWidth(), 1);
+            g.fillRect(r.getX(), r.getY(), 1, r.getHeight());
+            g.setColour(kLight);
+            g.fillRect(r.getX(), r.getBottom() - 1, r.getWidth(), 1);
+            g.fillRect(r.getRight() - 1, r.getY(), 1, r.getHeight());
+        }
+
+        // `text`: up to 6 characters; empty slots drawn all-off.
+        inline void drawKeyBox(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool unknown)
+        {
+            drawFrame(g, r);
+            const auto on = unknown ? kUnknownOn : kOn, off = unknown ? kUnknownOff : kOff;
+            for (int slot = 0; slot < 6; ++slot)
+            {
+                const auto* glyph = dotGlyph(slot < text.length() ? text[slot] : (juce::juce_wchar) ' ');
+                for (int row = 0; row < 7; ++row)
+                    for (int col = 0; col < 5; ++col)
+                    {
+                        g.setColour(glyph[row][col] == '1' ? on : off);
+                        g.fillRect(r.getX() + 4 + slot * 12 + col * 2, r.getY() + 6 + row * 2, 2, 2);
+                    }
+            }
+        }
+
+        // `value` 1..999 known; <= 0 unknown (segment g in the last two slots).
+        inline void drawBpmBox(juce::Graphics& g, juce::Rectangle<int> r, int value)
+        {
+            drawFrame(g, r);
+            static const int seg[7][4] = { { 1, 0, 7, 2 }, { 7, 1, 2, 6 }, { 7, 7, 2, 6 }, { 1, 12, 7, 2 },
+                                           { 0, 7, 2, 6 }, { 0, 1, 2, 6 }, { 1, 6, 7, 2 } };  // a b c d e f g
+            static const char* digs[10] = { "abcdef", "bc", "abdeg", "abcdg", "bcfg", "acdfg", "acdefg", "abc", "abcdefg", "abcdfg" };
+            const bool unknown = value <= 0;
+            const auto on = unknown ? kUnknownOn : kOn, off = unknown ? kUnknownOff : kOff;
+            value = juce::jlimit(0, 999, value);
+            for (int slot = 0; slot < 3; ++slot)
+            {
+                juce::String lit;
+                if (unknown)
+                    lit = slot >= 1 ? "g" : "";
+                else
+                {
+                    const int d = slot == 0 ? value / 100 : slot == 1 ? (value / 10) % 10 : value % 10;
+                    const bool leadingBlank = (slot == 0 && value < 100) || (slot == 1 && value < 10);
+                    lit = leadingBlank ? juce::String() : juce::String(digs[d]);
+                }
+                for (int k = 0; k < 7; ++k)
+                {
+                    g.setColour(lit.containsChar((juce::juce_wchar) ('a' + k)) ? on : off);
+                    g.fillRect(r.getX() + 8 + slot * 12 + seg[k][0], r.getY() + 6 + seg[k][1], seg[k][2], seg[k][3]);
+                }
+            }
+        }
+    } // namespace led
+
     class ResultTile : public juce::Component
     {
     public:
         ResultTile() { setMouseCursor(juce::MouseCursor::DraggingHandCursor); }
+
+        // keyName: "A min" / "C# maj", empty = unknown. bpm <= 0 = unknown.
+        void setKeyBpm(const juce::String& newKey, int newBpm)
+        {
+            if (newKey != keyName || newBpm != bpm)
+            {
+                keyName = newKey; bpm = newBpm;
+                repaint();
+            }
+        }
 
         void setInfo(const juce::String& newTitle, const juce::String& newMeta, const juce::String& newPath)
         {
@@ -402,6 +511,13 @@ namespace lgui
             g.setFont(makeFont(12.0f));
             g.drawText(meta, 58, 39, 348, 16, juce::Justification::centredLeft, true);
 
+            // Key / BPM (mockup v2: rects are editor coordinates minus the tile origin (30,119))
+            g.setFont(makeFont(11.0f, true));
+            g.drawText("KEY", 58, 69, 26, 13, juce::Justification::centredLeft, false);
+            g.drawText("BPM", 182, 69, 28, 13, juce::Justification::centredLeft, false);
+            led::drawKeyBox(g, { 88, 62, 78, 26 }, keyName.isNotEmpty() ? keyName : juce::String("--"), keyName.isEmpty());
+            led::drawBpmBox(g, { 214, 62, 50, 26 }, bpm);
+
             // Drag strip (14,94,392,40)
             const juce::Rectangle<float> strip(14.0f, 94.0f, 392.0f, 40.0f);
             g.setColour(juce::Colour(0xffd8d8f0));
@@ -421,7 +537,8 @@ namespace lgui
         void mouseDrag(const juce::MouseEvent& e) override { drag.mouseDrag(*this, e, juce::File(path)); }
 
     private:
-        juce::String title, meta, path;
+        juce::String title, meta, path, keyName;
+        int bpm = 0;
         FileDragSource drag;
     };
 
@@ -460,7 +577,7 @@ namespace lgui
     class HistoryList : public juce::Component
     {
     public:
-        struct Row { juce::String id, title, path, format; bool missing = false; };
+        struct Row { juce::String id, title, path, format; bool missing = false; bool analysed = false; juce::String key; int bpm = 0; };
         static constexpr int rowH = 22;
 
         std::function<void(const juce::String& id)> onRemove;
@@ -506,10 +623,22 @@ namespace lgui
                     if (sel) { g.setColour(kNavy); g.fillRect(2, y, w - 4, rowH); }
                     g.setColour(sel ? kLight : (r.missing ? kDark : kBlack));
                     g.setFont(makeFont(12.0f));
-                    g.drawText(r.title, 8, y, 262, rowH, juce::Justification::centredLeft, true);
+                    g.drawText(r.title, 8, y, 176, rowH, juce::Justification::centredLeft, true);
                     g.drawText(r.format.equalsIgnoreCase("wav") ? "WAV 24-bit" : "MP3 320",
-                               276, y, 80, rowH, juce::Justification::centredRight, false);
-                    g.drawText(r.missing ? "Missing" : "OK", 366, y, 60, rowH, juce::Justification::centredRight, false);
+                               192, y, 70, rowH, juce::Justification::centredRight, false);
+
+                    // Key / BPM: blank for entries that predate the analyser, grey "--" when unknown.
+                    const auto unknownColour = sel ? juce::Colour(0xffc0c0c0) : kDark;
+                    if (r.analysed)
+                    {
+                        const bool noKey = r.key.isEmpty(), noBpm = r.bpm <= 0;
+                        g.setColour(noKey ? unknownColour : (sel ? kLight : (r.missing ? kDark : kBlack)));
+                        g.drawText(noKey ? juce::String("--") : r.key, 272, y, 54, rowH, juce::Justification::centredRight, false);
+                        g.setColour(noBpm ? unknownColour : (sel ? kLight : (r.missing ? kDark : kBlack)));
+                        g.drawText(noBpm ? juce::String("--") : juce::String(r.bpm), 334, y, 30, rowH, juce::Justification::centredRight, false);
+                    }
+                    g.setColour(sel ? kLight : (r.missing ? kDark : kBlack));
+                    g.drawText(r.missing ? "Missing" : "OK", 374, y, 52, rowH, juce::Justification::centredRight, false);
                 }
             }
             // Minimal scroll thumb when the content overflows
