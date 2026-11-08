@@ -197,7 +197,7 @@ inline void estimateBpm(const float* x, std::size_t n, Result& out, CancelFn&& s
     while (bpm < 70.0) bpm *= 2.0;
     while (bpm >= 180.0) bpm *= 0.5;
     out.bpm = bpm;
-    out.bpmValid = out.bpmScore >= 12.0;
+    out.bpmValid = out.bpmScore >= 10.0;
 }
 
 //==============================================================================
@@ -325,14 +325,14 @@ inline void estimateKey(const float* x, std::size_t n, Result& out, Profile prof
     out.minor = bestMinor;
     out.keyCorrelation = best;
     out.keyMargin = best - second;
-    out.keyValid = best >= 0.6;
+    out.keyValid = best >= 0.5;
 }
 
 //==============================================================================
 // Analyse the middle `maxSeconds` of the track (bounded time on long files).
 template <typename CancelFn>
 inline Result analyse(const std::vector<float>& mono, CancelFn&& shouldCancel,
-                      double maxSeconds = 180.0, Profile profile = Profile::krumhansl)
+                      double maxSeconds = 180.0, Profile profile = Profile::temperley)
 {
     Result r;
     std::size_t start = 0, len = mono.size();
