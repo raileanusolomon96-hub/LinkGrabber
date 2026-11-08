@@ -224,7 +224,7 @@ analysing_state:
   board: "keeps the fully-revealed look of done (all 96 tiles revealed, flat #c0c0c0 with #808080 border, no numbers) plus a slow sweeping highlight: a 2-column band of #e6e6e6 tiles (tile_wave colour, 1px bevel) moving left to right, one column per ~110 ms (full pass ~1.8 s), wrapping to the left edge and repeating until done"
   result_tile: hidden until done
   go_button: "label 'Cancel'"
-  cancel: "Esc key, smiley click or Cancel button stop analysis and return to idle (same as other active states). Downloaded file stays on disk untagged; no history entry (engine decision, see brief)."
+  cancel: "Esc key, smiley click or Cancel button stop analysis and return to idle (same as other active states). Downloaded file stays on disk untagged AND a history entry is added with key/bpm unknown (--); the download itself succeeded."
   on_complete: "file is renamed with tags BEFORE done; tile, drag payload and history hold the final path; then state done"
   on_unknown: "silence/speech/unclear/too short: download still succeeds; done with unknown key/bpm; file name gets NO tag"
 
@@ -244,4 +244,4 @@ changes_from_v1:
   - "Unchanged: window 480x360, all control/widget rects outside result tile and history rows, colours, board behaviour, `format` parameter (still the only parameter; NO new parameters)."
 
 # Finalization metadata
-finalized: false
+finalized: true
