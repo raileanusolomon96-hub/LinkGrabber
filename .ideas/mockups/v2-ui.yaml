@@ -1,0 +1,247 @@
+# LinkGrabber UI mockup v2 - v1 unchanged + Key/BPM feature (analysing state, result-tile LEDs, history columns)
+# Target implementation: NATIVE JUCE (juce::Graphics), decision D1. No WebView.
+# All coordinates are window-relative pixels, origin top-left. 1px = 1 JUCE logical pixel.
+window:
+  width: 480
+  height: 360
+  resizable: false
+  background: "#c0c0c0"
+  outer_bevel: { style: raised, thickness: 2 }   # white top/left, #808080 bottom/right
+
+controls:            # APVTS-bound parameters only
+  - id: format
+    type: combo
+    position: { x: 295, y: 71 }
+    size: { width: 90, height: 26 }
+    options: ["MP3 320", "WAV 24-bit"]
+    default: "MP3 320"
+    default_index: 0
+    label: "Format"
+    notes: "Non-automatable Choice. Raised bevel button with down-arrow; popup list is a flat white list with 1px black border."
+
+widgets:             # non-parameter UI (state tree / DownloadManager driven)
+  - id: top_bar_panel
+    kind: sunken_panel
+    rect: { x: 15, y: 15, w: 450, h: 48 }
+    border: 2
+  - id: led_percent
+    kind: led_counter
+    rect: { x: 22, y: 22, w: 53, h: 34 }
+    digits: 3
+    range: [0, 100]
+    meaning: download progress percent
+  - id: smiley
+    kind: smiley_button
+    rect: { x: 223, y: 22, w: 34, h: 34 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    face_diameter: 24
+    states: [idle_smile, working_oh, analysing_sunglasses, done_sunglasses, error_dead_x]
+    click: reset to idle (cancels job if active, including during analysing)
+  - id: led_elapsed
+    kind: led_counter
+    rect: { x: 405, y: 22, w: 53, h: 34 }
+    digits: 3
+    range: [0, 999]
+    meaning: elapsed seconds of current job (keeps counting during analysing; holds at final value after done/error)
+  - id: link_field
+    kind: text_editor
+    rect: { x: 15, y: 71, w: 200, h: 26 }
+    bevel: { style: sunken, thickness: 2 }
+    background: "#ffffff"
+    placeholder: "Paste YouTube link"
+    placeholder_color: "#808080"
+  - id: paste_button
+    kind: button
+    label: "Paste"
+    rect: { x: 225, y: 71, w: 60, h: 26 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+  - id: go_button
+    kind: button
+    label: "Download"
+    label_while_active: "Cancel"
+    rect: { x: 395, y: 71, w: 70, h: 26 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    font_weight: bold
+  - id: board
+    kind: tile_board
+    frame: { x: 15, y: 107, w: 450, h: 174 }
+    frame_bevel: { style: sunken, thickness: 3 }
+    grid: { columns: 16, rows: 6, count: 96 }
+    tile: { size: 27, origin_x: 24, origin_y: 113 }   # tile (c,r) at x=24+27c, y=113+27r; grid 432x162
+    tile_hidden:  { fill: "#c0c0c0", bevel: raised, thickness: 2, light: "#ffffff", dark: "#808080" }
+    tile_revealed: { fill: "#c0c0c0", border: "#808080", border_thickness: 1 }
+    tile_mine: { fill: "#ff0000", border: "#808080", glyph: "black mine: 10px circle + 8 spokes + 2px white highlight" }
+    tile_wave: { fill: "#e6e6e6", note: "converting: front column (1 col wide) of remaining tiles flashes, everything left of it is revealed" }
+    reveal_rule: "downloading reveals floor(percent/100*96*0.75) tiles (max 72 at 100%) in a fixed seeded shuffled order; converting sweeps columns left to right revealing the remaining 24+; error mine = next unrevealed tile in the order"
+    numbers: { font: "bold 16px", colors: { 1: "#0000ff", 2: "#008000", 3: "#ff0000", 4: "#000080" }, distribution: "about 12% of revealed tiles show 1, 6% show 2, 3% show 3; cleared on done" }
+  - id: result_tile
+    kind: draggable_file_tile
+    visible_when: done
+    rect: { x: 30, y: 119, w: 420, h: 150 }
+    bevel: { style: raised, thickness: 3 }
+    fill: "#c0c0c0"
+    grip_icon: { rect: { x: 44, y: 133, w: 28, h: 56 }, dots: "3 cols x 6 rows, 4px dots at 8px pitch, #808080 with 1px #ffffff offset (+1,+1)" }
+    title: { x: 88, y: 133, font: "bold 14px", color: "#000000", ellipsis: true }
+    meta: { x: 88, y: 158, font: "12px", text: "<FORMAT> | <SIZE>", color: "#000000" }   # unchanged; text line occupies y158-172
+    key_label: { rect: { x: 88, y: 188, w: 26, h: 13 }, text: "KEY", font: "bold 11px", color: "#000000", align: left }
+    key_led: { rect: { x: 118, y: 181, w: 78, h: 26 }, kind: led_text_box, chars: 6, text: "<KEY>", example: "A min", unknown_text: "--" }
+    bpm_label: { rect: { x: 212, y: 188, w: 28, h: 13 }, text: "BPM", font: "bold 11px", color: "#000000", align: left }
+    bpm_led: { rect: { x: 244, y: 181, w: 50, h: 26 }, kind: led_number_box, digits: 3, text: "<BPM>", example: "128", unknown_text: "--" }
+    drag_strip: { rect: { x: 44, y: 213, w: 392, h: 40 }, border: "2px dashed #000080", fill: "#d8d8f0" , text: "Drag me to your DAW  >>", font: "bold 13px", color: "#000080" }
+    key_bpm_note: "LED boxes sit between meta (ends y172) and drag strip (starts y213): 9px above, 6px below. Grip (x44-72), title, meta, drag strip are untouched. Both boxes are display-only and not part of the drag hit-test exception (dragging from them drags the file as usual)."
+    drag_payload: "real file in output folder; performExternalDragDropOfFiles(canMoveFiles=false, source=this) after >=4px move"
+  - id: history_header
+    kind: expander_bar
+    rect: { x: 15, y: 289, w: 340, h: 22 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    label: "History (N)"  # arrow glyph: right when collapsed, down when expanded
+  - id: show_in_finder
+    kind: button
+    label: "Show in Finder"
+    rect: { x: 365, y: 289, w: 100, h: 22 }
+    bevel: { style: raised, thickness: 2, pressed: sunken }
+    action: revealToUser on selected row (or latest entry)
+  - id: history_list
+    kind: scroll_list
+    visible_when: history expanded (overlays the board area)
+    rect: { x: 15, y: 107, w: 450, h: 174 }
+    bevel: { style: sunken, thickness: 2 }
+    background: "#ffffff"
+    row_height: 22
+    # v2: x offsets are relative to the list rect left edge (x=15); row inner width 446; content ends at x+426 as in v1 (room for scrollbar)
+    columns:
+      title:  { x: "x+8",   w: 176, align: left,  truncation: "ellipsis; clipped to its 176px box so it can never reach the format column (8px guaranteed gap)" }
+      format: { x: "x+192", w: 70,  align: right, text: "MP3 320 | WAV 24-bit (ends x+262)" }
+      key:    { x: "x+272", w: 54,  align: right, text: "A min | C# maj | Bb min | -- | (blank for old entries) (ends x+326)" }
+      bpm:    { x: "x+334", w: 30,  align: right, text: "128 | -- | (blank) (ends x+364)" }
+      status: { x: "x+374", w: 52,  align: right, text: "OK | Missing (ends x+426)" }
+    column_gaps: "8-10px between all columns"
+    no_column_header: true
+    unknown_cell: { text: "--", color: "#808080" }
+    old_entry_cell: { text: "", note: "history.json entries without key/bpm fields: key and bpm cells empty (not '--')" }
+    row_selected: { fill: "#000080", text: "#ffffff", unknown_cell: "#c0c0c0" }
+    row_missing: { text: "#808080", selected_text: "#c0c0c0", draggable: false, note: "all columns incl. key/bpm greyed" }
+    drag: "each existing row draggable (performExternalDragDropOfFiles)"
+  - id: status_line
+    kind: status_bar
+    rect: { x: 15, y: 321, w: 450, h: 24 }
+    bevel: { style: sunken, thickness: 1 }
+    text_inset: 6
+    font: "12px"
+    colors: { normal: "#000000", error: "#800000" }
+    messages:
+      idle: "Paste a YouTube link, pick a format, then press Download."
+      downloading: "Downloading... NN%"
+      converting: "Converting to <FORMAT>..."
+      analysing: "Listening for key and tempo..."
+      done: "Done. A minor, 128 BPM. Drag the file tile into your DAW."          # <KEY full name>, <BPM>
+      done_unknown: "Done. Key and BPM unknown. Drag the file tile into your DAW."
+      empty_link: "Paste a YouTube link first."
+      invalid_link: "Error: invalid link. Use a youtube.com or youtu.be URL."
+      unavailable: "Error: video unavailable (private, removed or region-locked)."
+      tool_missing: "Error: yt-dlp or ffmpeg not found. Install them and retry."
+      update_ytdlp: "Error: yt-dlp is out of date. Update yt-dlp and retry."
+
+layout_summary:
+  rows_y: { top_bar: "15-63", link_row: "71-97", board: "107-281", history_header: "289-311", status: "321-345" }
+  edge_padding: "15px left/right/top, 15px bottom"
+  gaps: "10px between link-row controls; 8-12px between rows"
+
+styling:
+  colors:
+    background: "#c0c0c0"
+    bevel_light: "#ffffff"
+    bevel_dark: "#808080"
+    bevel_darkest: "#404040"      # outer shadow line for raised buttons (1px) - optional
+    outline: "#000000"
+    desktop_backdrop_test_only: "#008080"
+    led_background: "#000000"
+    led_on: "#ff0000"
+    led_off: "#2a0000"
+    smiley_fill: "#ffff00"
+    smiley_outline: "#000000"
+    link_accent: "#000080"
+    number_1: "#0000ff"
+    number_2: "#008000"
+    number_3: "#ff0000"
+    number_4: "#000080"
+    mine: "#ff0000"
+  bevel_recipe:
+    raised: "fill #c0c0c0; N px top+left lines #ffffff; N px bottom+right lines #808080; 1px #000000 outline only on buttons/smiley"
+    sunken: "fill per widget; N px top+left #808080; N px bottom+right #ffffff"
+  led_text_box:    # v2: Key/BPM boxes on the result tile
+    frame: "1px sunken edge (#808080 top/left, #ffffff bottom/right) like led_percent, interior #000000"
+    cell: "dot/segment colours: on #ff0000, off #2a0000"
+    unknown: "on colour becomes #808080 (dim), off colour #161616; text '--'"
+    key_box: "78x26. Glyphs 5x7 dot-matrix, cell 2x2 px -> glyph 10x14, pitch 12 (2px gap), 6 chars = 70px, centered (4px left margin), glyph top at box y+6. Text left-aligned in char slots, unused slots drawn all-off."
+    bpm_box: "50x26. 3 seven-segment digits at 9x14 (thickness 2): a(1,0,7,2) g(1,6,7,2) d(1,12,7,2) f(0,1,2,6) b(7,1,2,6) e(0,7,2,6) c(7,7,2,6); pitch 12, block 33px, box x+8, digit top y+6. Right-aligned, NO zero padding (leading slots all-off). Unknown: segment g only in last two slots."
+  key_dot_font:    # rows top to bottom, 1 = lit cell; needed glyphs only
+    A: ["01110","10001","10001","11111","10001","10001","10001"]
+    B: ["11110","10001","10001","11110","10001","10001","11110"]
+    C: ["01110","10001","10000","10000","10000","10001","01110"]
+    D: ["11110","10001","10001","10001","10001","10001","11110"]
+    E: ["11111","10000","10000","11110","10000","10000","11111"]
+    F: ["11111","10000","10000","11110","10000","10000","10000"]
+    G: ["01110","10001","10000","10111","10001","10001","01111"]
+    "#": ["01010","01010","11111","01010","11111","01010","01010"]
+    b: ["10000","10000","10110","11001","10001","11001","10110"]
+    m: ["00000","00000","11010","10101","10101","10101","10101"]
+    a: ["00000","00000","01110","00001","01111","10001","01111"]
+    i: ["00100","00000","01100","00100","00100","00100","01110"]
+    n: ["00000","00000","10110","11001","10001","10001","10001"]
+    j: ["00010","00000","00110","00010","00010","10010","01100"]
+    "-": ["00000","00000","00000","11111","00000","00000","00000"]
+    " ": ["00000","00000","00000","00000","00000","00000","00000"]
+  key_text_format: "<Note><# or b optional> <min|maj>, e.g. 'A min', 'C# maj', 'Bb min' (max 6 chars). Sharps preferred, flats only for Bb/Eb/Ab by engine choice."
+  led_digit:
+    size: { w: 13, h: 24 }
+    gap: 3
+    padding: { left: 4, top: 5 }
+    segments: "7 rectangles, thickness 3: a(2,0,9,3) g(2,10,9,3) d(2,21,9,3) f(0,2,3,9) b(10,2,3,9) e(0,12,3,10) c(10,12,3,10)"
+    off_segments: "drawn in #2a0000"
+  smiley:
+    face: "circle d=24 centered in button, fill #ffff00, 1px black outline"
+    idle: "eyes 2x3 black at (-5,-4),(+4,-4) from center; smile arc r=7 below center"
+    working: "same eyes; mouth = black ellipse 5x6 at (0,+5)"
+    analysing: "SUNGLASSES (same drawing as done): black bar 18x4 plus two 7x6 lenses, arms to edge; smile arc. Worn for the whole analysing state; no extra animation."
+    done: "sunglasses: black bar 18x4 plus two 7x6 lenses, arms to edge; smile arc (identical to analysing; the sunglasses simply stay on when the result appears)"
+    error: "X eyes (3px arms, 2px stroke) at both eye positions; frown arc r=7 above y+8"
+  fonts:
+    primary: "MS Sans Serif, Tahoma, Verdana, sans-serif"
+    juce_hint: "juce::Font(juce::FontOptions(12.0f)) default sans for labels; bold 16 for tile numbers; consider bundling a pixel font (e.g. Pixelated MS Sans Serif) for fidelity"
+    sizes: { label: 12, button: 12, title: 14, tile_number: 16, status: 12 }
+
+behavior:
+  states: [idle, downloading, converting, analysing, done, error]
+  smiley_by_state: { idle: smile, downloading: oh, converting: oh, analysing: sunglasses, done: sunglasses, error: dead_x }
+  led_percent: "0 idle; percent during downloading; holds 100 during converting, analysing and done; holds last value on error"
+  led_elapsed: "seconds since job start; keeps counting through analysing; stops at done/error"
+  timer: "30 Hz juce::Timer only while a job is active or animation playing"
+  format_param_message: '{ "type": "parameter", "id": "format", "value": 0|1 }'
+
+analysing_state:
+  entered: "after converting completes; typical duration a few seconds (worker thread)"
+  board: "keeps the fully-revealed look of done (all 96 tiles revealed, flat #c0c0c0 with #808080 border, no numbers) plus a slow sweeping highlight: a 2-column band of #e6e6e6 tiles (tile_wave colour, 1px bevel) moving left to right, one column per ~110 ms (full pass ~1.8 s), wrapping to the left edge and repeating until done"
+  result_tile: hidden until done
+  go_button: "label 'Cancel'"
+  cancel: "Esc key, smiley click or Cancel button stop analysis and return to idle (same as other active states). Downloaded file stays on disk untagged; no history entry (engine decision, see brief)."
+  on_complete: "file is renamed with tags BEFORE done; tile, drag payload and history hold the final path; then state done"
+  on_unknown: "silence/speech/unclear/too short: download still succeeds; done with unknown key/bpm; file name gets NO tag"
+
+key_bpm:
+  file_name_note: "NOTE ONLY, not drawn: saved file name carries the tags, e.g. 'Title [id] Am 128bpm.wav' (key short form Am / C#maj style, then '<N>bpm'). Unknown key/bpm: name unchanged, no tag. Title in tile/history shows the title without tags."
+  done_status: "Done. A minor, 128 BPM. Drag the file tile into your DAW."
+  unknown_display: "'--' in #808080 in the dim LED boxes and in history cells; status uses done_unknown message"
+  history_fields: "optional key + bpm per entry; old entries show blank cells"
+
+changes_from_v1:
+  - "NEW state `analysing` between converting and done; state list, smiley_by_state, led_percent/led_elapsed behaviour and status table updated."
+  - "smiley: analysing state shows sunglasses (reuses done drawing); states list extended."
+  - "result_tile: added key_label, key_led, bpm_label, bpm_led (y181-207, between meta and drag strip). Grip, title, meta, drag strip rects unchanged."
+  - "history_list: columns re-laid out to title/format/key/bpm/status (new x positions and widths); title width fixed to 176 with ellipsis; unknown '--' grey; old entries blank."
+  - "status_line: new messages analysing, done (with key/BPM), done_unknown."
+  - "styling: led_text_box, key_dot_font added; compact LED glyphs (9x14 seven-seg, 5x7 dot) for the tile boxes."
+  - "Unchanged: window 480x360, all control/widget rects outside result tile and history rows, colours, board behaviour, `format` parameter (still the only parameter; NO new parameters)."
+
+# Finalization metadata
+finalized: false

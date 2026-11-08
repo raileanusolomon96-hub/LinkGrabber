@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LinkGrabber UI Mockup v2</title>
+<style>
+  html, body { height: 100%; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+    overflow: hidden;
+    background: #008080;
+    color: #000000;
+    font-family: "MS Sans Serif", Tahoma, Verdana, sans-serif;
+    font-size: 12px;
+  }
+  .container { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+
+  /* ---- plugin window: 480x360, absolute pixel layout ---- */
+  #win { position: relative; width: 480px; height: 360px; background: #c0c0c0;
+         border-top: 2px solid #fff; border-left: 2px solid #fff; border-right: 2px solid #808080; border-bottom: 2px solid #808080;
+         box-shadow: 1px 1px 0 #000; }
+  #win > * { position: absolute; }
+  .raised { background: #c0c0c0; border: 1px solid #000; box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 #808080, inset 2px 2px 0 #dfdfdf, inset -2px -2px 0 #808080; }
+  .raised.pressed, .raised:active { box-shadow: inset 1px 1px 0 #808080, inset -1px -1px 0 #c0c0c0; padding-top: 1px; padding-left: 1px; }
+  .sunken { border-top: 2px solid #808080; border-left: 2px solid #808080; border-right: 2px solid #fff; border-bottom: 2px solid #fff; }
+  .btn { font: inherit; color: #000; text-align: center; display: flex; align-items: center; justify-content: center; white-space: nowrap; }
+  .btn.disabled { color: #808080; text-shadow: 1px 1px 0 #fff; }
+  /* coordinates are window-relative; subtract 2px frame since abs is inside border box */
+  #topbar { left: 13px; top: 13px; width: 450px; height: 48px; }
+  #ledL { left: 20px; top: 20px; } #ledR { left: 403px; top: 20px; } #smiley { left: 221px; top: 20px; width: 34px; height: 34px; padding: 0; }
+  canvas { display: block; }
+  #link { left: 13px; top: 69px; width: 200px; height: 26px; background: #fff; padding: 0 5px; font: 12px "MS Sans Serif", Tahoma, Verdana, sans-serif; color: #000; outline: none; user-select: text; -webkit-user-select: text; cursor: text; }
+  #link::placeholder { color: #808080; }
+  #paste { left: 223px; top: 69px; width: 60px; height: 26px; }
+  #fmt { left: 293px; top: 69px; width: 90px; height: 26px; justify-content: space-between; padding: 0 8px; }
+  #go { left: 393px; top: 69px; width: 70px; height: 26px; font-weight: bold; }
+  #fmtlist { left: 293px; top: 95px; width: 90px; background: #fff; border: 1px solid #000; display: none; z-index: 20; }
+  #fmtlist div { height: 20px; line-height: 20px; padding: 0 8px; }
+  #fmtlist div.sel, #fmtlist div:hover { background: #000080; color: #fff; }
+  #board { left: 13px; top: 105px; width: 450px; height: 174px; }
+  #tiles { left: 9px; top: 6px; }  /* origin (24,113) in window coords */
+  #result { left: 28px; top: 117px; width: 420px; height: 150px; display: none; border: 3px solid #fff; border-right-color: #808080; border-bottom-color: #808080; box-shadow: 1px 1px 0 #000; background: #c0c0c0; z-index: 5; cursor: grab; }
+  #result > * { position: absolute; }
+  #rGrip { left: 11px; top: 11px; }
+  #rTitle { left: 45px; top: 10px; width: 350px; font-weight: bold; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rMeta { left: 45px; top: 34px; font-size: 12px; }
+  #rKeyLbl { left: 55px; top: 66px; font-weight: bold; font-size: 11px; }
+  #rBpmLbl { left: 179px; top: 66px; font-weight: bold; font-size: 11px; }
+  #rKey { left: 85px; top: 59px; } #rBpm { left: 211px; top: 59px; }
+  #rStrip { left: 11px; top: 88px; width: 392px; height: 40px; border: 2px dashed #000080; background: #d8d8f0; color: #000080; font-weight: bold; font-size: 13px; display: flex; align-items: center; justify-content: center; letter-spacing: 0.5px; }
+  #histHdr { left: 13px; top: 287px; width: 340px; height: 22px; justify-content: flex-start; padding: 0 8px; }
+  #finder { left: 363px; top: 287px; width: 100px; height: 22px; }
+  #hist { left: 13px; top: 105px; width: 450px; height: 174px; background: #fff; display: none; overflow-y: auto; z-index: 10; }
+  /* v2 columns: spec x offsets are relative to list rect (x=15); inner box starts at +2, so css left = spec - 2 */
+  .row { position: relative; height: 22px; line-height: 22px; white-space: nowrap; cursor: default; }
+  .row span { position: absolute; top: 0; height: 22px; overflow: hidden; }
+  .row .t { left: 6px; width: 176px; text-overflow: ellipsis; }
+  .row .f { left: 190px; width: 70px; text-align: right; }
+  .row .k { left: 270px; width: 54px; text-align: right; }
+  .row .b { left: 332px; width: 30px; text-align: right; }
+  .row .s { left: 372px; width: 52px; text-align: right; }
+  .row .unk { color: #808080; }
+  .row.sel { background: #000080; color: #fff; }
+  .row.sel .unk { color: #c0c0c0; }
+  .row.missing { color: #808080; }
+  .row.missing.sel { color: #c0c0c0; }
+  #status { left: 13px; top: 319px; width: 450px; height: 24px; border-top: 1px solid #808080; border-left: 1px solid #808080; border-right: 1px solid #fff; border-bottom: 1px solid #fff; padding: 0 6px; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status.err { color: #800000; }
+
+  /* ---- test harness (not part of the plugin design) ---- */
+  #harness { width: 560px; background: #e8e8e8; border: 1px solid #000; padding: 8px 10px; font-size: 11px; line-height: 20px; }
+  #harness select, #harness button { font: inherit; }
+  #harness * { user-select: none; }
+  #harness .sw { margin: 1px 2px; padding: 0 6px; }
+  #harness .sw.on { font-weight: bold; background: #000080; color: #fff; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div id="win">
+    <div id="topbar" class="sunken"></div>
+    <canvas id="ledL" width="53" height="34"></canvas>
+    <div id="smiley" class="raised btn" title="Reset"><canvas id="face" width="34" height="34" style="pointer-events:none"></canvas></div>
+    <canvas id="ledR" width="53" height="34"></canvas>
+
+    <input id="link" class="sunken" type="text" placeholder="Paste YouTube link" spellcheck="false" autocomplete="off" />
+    <div id="paste" class="raised btn">Paste</div>
+    <div id="fmt" class="raised btn"><span id="fmtLabel">MP3 320</span><span style="font-size:8px">&#9660;</span></div>
+    <div id="go" class="raised btn">Download</div>
+    <div id="fmtlist"><div data-i="0" class="sel">MP3 320</div><div data-i="1">WAV 24-bit</div></div>
+
+    <div id="board" class="sunken" style="background:#c0c0c0">
+      <canvas id="tiles" width="432" height="162"></canvas>
+    </div>
+    <div id="result" draggable="true">
+      <canvas id="rGrip" width="28" height="56"></canvas>
+      <div id="rTitle">Title</div>
+      <div id="rMeta">MP3 320 | 0 MB</div>
+      <div id="rKeyLbl">KEY</div><canvas id="rKey" width="78" height="26"></canvas>
+      <div id="rBpmLbl">BPM</div><canvas id="rBpm" width="50" height="26"></canvas>
+      <div id="rStrip">Drag me to your DAW &nbsp;&raquo;</div>
+    </div>
+    <div id="hist" class="sunken"></div>
+
+    <div id="histHdr" class="raised btn">&#9658; History (0)</div>
+    <div id="finder" class="raised btn">Show in Finder</div>
+    <div id="status" class="sunken">Ready</div>
+  </div>
+
+  <div id="harness">
+    <b>State preview</b> (not part of plugin):<br />
+    <span id="switcher"></span><br />
+    <b>Test harness</b> &nbsp;|&nbsp; Next download fails with:
+    <select id="failMode">
+      <option value="none">(no failure)</option>
+      <option value="unavailable">video unavailable</option>
+      <option value="tool_missing">tool missing</option>
+      <option value="update_ytdlp">yt-dlp out of date</option>
+    </select>
+    &nbsp; Next result: <select id="resMode"><option value="key">key + BPM</option><option value="unknown">unknown</option></select><br />
+    Type any non-YouTube text and press Download to get "invalid link". Click the smiley or press Esc to cancel/reset. Drag the file tile or a history row onto the page (see console).
+  </div>
+</div>
+
+<script>
+  // ---------- Mock JUCE backend ----------
+  const paramState = { format: 0 };
+  window.Juce = {
+    getComboBoxState: (id) => ({ selectedId: paramState[id], valueChangedEvent: { addListener: (fn) => console.log("Listener added for " + id) } }),
+    postMessage: (msg) => console.log("[param message]", JSON.stringify(msg))
+  };
+  document.addEventListener("contextmenu", (e) => { e.preventDefault(); return false; });
+
+  // ---------- constants ----------
+  const COLS = 16, ROWS = 6, N = 96, TS = 27, REVEAL_CAP = 0.75;
+  const FORMATS = ["MP3 320", "WAV 24-bit"];
+  const MSG = {
+    idle: "Paste a YouTube link, pick a format, then press Download.",
+    empty: "Paste a YouTube link first.",
+    invalid: "Error: invalid link. Use a youtube.com or youtu.be URL.",
+    unavailable: "Error: video unavailable (private, removed or region-locked).",
+    tool_missing: "Error: yt-dlp or ffmpeg not found. Install them and retry.",
+    update_ytdlp: "Error: yt-dlp is out of date. Update yt-dlp and retry.",
+    analysing: "Listening for key and tempo...",
+    done: (r) => r ? "Done. " + r.keyFull + ", " + r.bpm + " BPM. Drag the file tile into your DAW." : "Done. Key and BPM unknown. Drag the file tile into your DAW."
+  };
+  const SAMPLES = [
+    { key: "A min", keyFull: "A minor", bpm: 128 }, { key: "C# maj", keyFull: "C# major", bpm: 92 },
+    { key: "Bb min", keyFull: "Bb minor", bpm: 140 }, { key: "F maj", keyFull: "F major", bpm: 87 }
+  ];
+  let sampleIx = 0;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- deterministic board ----------
+  function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const rnd = mulberry32(1337);
+  const order = Array.from({ length: N }, (_, i) => i);
+  for (let i = N - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  const rank = new Array(N); order.forEach((t, r) => rank[t] = r);
+  const numbers = Array.from({ length: N }, () => { const r = rnd(); return r < 0.12 ? 1 : r < 0.18 ? 2 : r < 0.21 ? 3 : 0; });
+  const NUM_COL = { 1: "#0000ff", 2: "#008000", 3: "#ff0000", 4: "#000080" };
+
+  // ---------- job state ----------
+  const S = { state: "idle", percent: 0, elapsed: 0, t0: 0, convStart: 0, mineTile: -1, msg: MSG.idle, err: false, fail: "none", failAt: 0, face: "smile", fmt: 0, link: "", anStart: 0, kb: null, hold: false };
+  const DL_MS = 8000, CV_MS = 2600, AN_MS = 4200;
+  let timer = null;
+
+  // ---------- painting ----------
+  function bevelRect(g, x, y, w, h, t, light, dark) {
+    g.fillStyle = light; g.fillRect(x, y, w, t); g.fillRect(x, y, t, h);
+    g.fillStyle = dark; g.fillRect(x, y + h - t, w, t); g.fillRect(x + w - t, y, t, h);
+    // mitre corners
+    g.fillStyle = dark; for (let i = 0; i < t; i++) { g.fillRect(x + w - t + i, y + i, 1, 1); g.fillRect(x + i, y + h - t + i, 1, 1); }
+  }
+  function drawMine(g, cx, cy) {
+    g.fillStyle = "#000"; g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2); g.fill();
+    g.fillRect(cx - 8, cy, 16, 1.5); g.fillRect(cx, cy - 8, 1.5, 16);
+    for (const [dx, dy] of [[-6, -6], [5, -6], [-6, 5], [5, 5]]) g.fillRect(cx + dx, cy + dy, 2, 2);
+    g.fillStyle = "#fff"; g.fillRect(cx - 2, cy - 2, 2, 2);
+  }
+  function drawTiles(waveCol) {
+    const g = $("tiles").getContext("2d");
+    g.clearRect(0, 0, 432, 162);
+    const done = S.state === "done" || S.state === "analysing";
+    const revealedN = Math.floor(S.percent / 100 * N * REVEAL_CAP);
+    for (let t = 0; t < N; t++) {
+      const c = t % COLS, r = Math.floor(t / COLS), x = c * TS, y = r * TS;
+      let revealed = false, wave = false;
+      if (done) { revealed = true; wave = S.state === "analysing" && (c === waveCol || c === waveCol + 1); }
+      else if (S.state === "converting") { revealed = rank[t] < revealedN || c < waveCol; wave = c === waveCol; }
+      else revealed = rank[t] < revealedN;
+      if (t === S.mineTile) {
+        g.fillStyle = "#808080"; g.fillRect(x, y, TS, TS); g.fillStyle = "#ff0000"; g.fillRect(x + 1, y + 1, TS - 1, TS - 1); drawMine(g, x + 13, y + 13); continue;
+      }
+      if (revealed && wave) {
+        g.fillStyle = "#808080"; g.fillRect(x, y, TS, TS); g.fillStyle = "#e6e6e6"; g.fillRect(x + 1, y + 1, TS - 1, TS - 1); bevelRect(g, x + 1, y + 1, TS - 1, TS - 1, 1, "#ffffff", "#a0a0a0");
+      } else if (revealed) {
+        g.fillStyle = "#808080"; g.fillRect(x, y, TS, TS); g.fillStyle = "#c0c0c0"; g.fillRect(x + 1, y + 1, TS - 1, TS - 1);
+        if (!done && !(S.state === "done") && numbers[t]) { g.fillStyle = NUM_COL[numbers[t]]; g.font = "bold 16px Arial, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(numbers[t]), x + 14, y + 15); }
+      } else if (wave) {
+        g.fillStyle = "#e6e6e6"; g.fillRect(x, y, TS, TS); bevelRect(g, x, y, TS, TS, 1, "#ffffff", "#808080");
+      } else {
+        g.fillStyle = "#c0c0c0"; g.fillRect(x, y, TS, TS); bevelRect(g, x, y, TS, TS, 2, "#ffffff", "#808080");
+      }
+    }
+  }
+  const SEG = { a: [2, 0, 9, 3], g: [2, 10, 9, 3], d: [2, 21, 9, 3], f: [0, 2, 3, 9], b: [10, 2, 3, 9], e: [0, 12, 3, 10], c: [10, 12, 3, 10] };
+  const DIG = ["abcdef", "bc", "abdeg", "abcdg", "bcfg", "acdfg", "acdefg", "abc", "abcdefg", "abcdfg"];
+  function drawLed(canvasId, value) {
+    const g = $(canvasId).getContext("2d");
+    g.fillStyle = "#808080"; g.fillRect(0, 0, 53, 34); g.fillStyle = "#fff"; g.fillRect(1, 1, 52, 33); // 1px sunken edge
+    g.fillStyle = "#808080"; g.fillRect(0, 0, 53, 1); g.fillRect(0, 0, 1, 34); g.fillStyle = "#fff"; g.fillRect(0, 33, 53, 1); g.fillRect(52, 0, 1, 34);
+    g.fillStyle = "#000"; g.fillRect(1, 1, 51, 32);
+    const s = String(Math.max(0, Math.min(999, value))).padStart(3, "0");
+    for (let i = 0; i < 3; i++) {
+      const ox = 4 + i * 16, oy = 5, on = DIG[+s[i]];
+      for (const k in SEG) { g.fillStyle = on.includes(k) ? "#ff0000" : "#2a0000"; const q = SEG[k]; g.fillRect(ox + q[0], oy + q[1], q[2], q[3]); }
+    }
+  }
+  // ---- v2: Key / BPM LED boxes ----
+  const DOT = {
+    A: "01110 10001 10001 11111 10001 10001 10001", B: "11110 10001 10001 11110 10001 10001 11110", C: "01110 10001 10000 10000 10000 10001 01110",
+    D: "11110 10001 10001 10001 10001 10001 11110", E: "11111 10000 10000 11110 10000 10000 11111", F: "11111 10000 10000 11110 10000 10000 10000",
+    G: "01110 10001 10000 10111 10001 10001 01111", "#": "01010 01010 11111 01010 11111 01010 01010", b: "10000 10000 10110 11001 10001 11001 10110",
+    m: "00000 00000 11010 10101 10101 10101 10101", a: "00000 00000 01110 00001 01111 10001 01111", i: "00100 00000 01100 00100 00100 00100 01110",
+    n: "00000 00000 10110 11001 10001 10001 10001", j: "00010 00000 00110 00010 00010 10010 01100", "-": "00000 00000 00000 11111 00000 00000 00000", " ": "00000 00000 00000 00000 00000 00000 00000"
+  };
+  const SEG2 = { a: [1, 0, 7, 2], g: [1, 6, 7, 2], d: [1, 12, 7, 2], f: [0, 1, 2, 6], b: [7, 1, 2, 6], e: [0, 7, 2, 6], c: [7, 7, 2, 6] };
+  function ledFrame(g, w, h) {
+    g.fillStyle = "#808080"; g.fillRect(0, 0, w, h); g.fillStyle = "#fff"; g.fillRect(0, h - 1, w, 1); g.fillRect(w - 1, 0, 1, h);
+    g.fillStyle = "#808080"; g.fillRect(0, 0, w, 1); g.fillRect(0, 0, 1, h);
+    g.fillStyle = "#000"; g.fillRect(1, 1, w - 2, h - 2);
+  }
+  function drawKeyLed(text) { // text null = unknown
+    const g = $("rKey").getContext("2d"); ledFrame(g, 78, 26);
+    const unk = text === null, str = unk ? "--" : text, on = unk ? "#808080" : "#ff0000", off = unk ? "#161616" : "#2a0000";
+    const pad = unk ? 4 + 12 * 2 : 4; // unknown "--" centered in 6 slots
+    for (let slot = 0; slot < 6; slot++) {
+      const ch = unk ? (slot === 2 || slot === 3 ? "-" : " ") : (str[slot] || " ");
+      const rows = (DOT[ch] || DOT[" "]).split(" ");
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) {
+        g.fillStyle = rows[r][c] === "1" ? on : off; g.fillRect(4 + slot * 12 + c * 2, 6 + r * 2, 2, 2);
+      }
+    }
+  }
+  function drawBpmLed(bpm) {
+    const g = $("rBpm").getContext("2d"); ledFrame(g, 50, 26);
+    const unk = bpm === null, on = unk ? "#808080" : "#ff0000", off = unk ? "#161616" : "#2a0000";
+    const str = unk ? "  -" : String(bpm).padStart(3, " ");
+    for (let i = 0; i < 3; i++) {
+      const ch = unk ? (i > 0 ? "-" : " ") : str[i], lit = ch === " " ? "" : ch === "-" ? "g" : DIG[+ch];
+      for (const k in SEG2) { g.fillStyle = lit.includes(k) ? on : off; const q = SEG2[k]; g.fillRect(8 + i * 12 + q[0], 6 + q[1], q[2], q[3]); }
+    }
+  }
+  function drawFace(kind, pressed) {
+    const g = $("face").getContext("2d"); g.clearRect(0, 0, 34, 34);
+    const o = pressed ? 1 : 0, cx = 17 + o, cy = 17 + o;
+    g.fillStyle = "#000"; g.beginPath(); g.arc(cx, cy, 12, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#ffff00"; g.beginPath(); g.arc(cx, cy, 11, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#000"; g.strokeStyle = "#000"; g.lineWidth = 2;
+    const eyes = () => { g.fillRect(cx - 5, cy - 5, 2, 3); g.fillRect(cx + 3, cy - 5, 2, 3); };
+    const smile = () => { g.beginPath(); g.arc(cx, cy + 1, 6.5, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke(); };
+    if (kind === "smile") { eyes(); smile(); }
+    else if (kind === "oh") { eyes(); g.beginPath(); g.ellipse(cx, cy + 5, 2.5, 3.2, 0, 0, Math.PI * 2); g.fill(); }
+    else if (kind === "cool") {
+      g.fillRect(cx - 9, cy - 6, 18, 3); g.fillRect(cx - 8, cy - 4, 7, 5); g.fillRect(cx + 1, cy - 4, 7, 5); smile();
+    } else {
+      g.lineWidth = 1.6;
+      for (const ex of [cx - 4, cx + 4]) { g.beginPath(); g.moveTo(ex - 2.5, cy - 7); g.lineTo(ex + 2.5, cy - 2); g.moveTo(ex + 2.5, cy - 7); g.lineTo(ex - 2.5, cy - 2); g.stroke(); }
+      g.lineWidth = 2; g.beginPath(); g.arc(cx, cy + 9, 5.5, 1.15 * Math.PI, 1.85 * Math.PI); g.stroke();
+    }
+  }
+  function drawGrip() {
+    const g = $("rGrip").getContext("2d");
+    for (let r = 0; r < 6; r++) for (let c = 0; c < 3; c++) {
+      const x = 2 + c * 10, y = 2 + r * 9;
+      g.fillStyle = "#fff"; g.fillRect(x + 1, y + 1, 4, 4); g.fillStyle = "#808080"; g.fillRect(x, y, 4, 4);
+    }
+  }
+
+  // ---------- UI sync ----------
+  function setStatus(text, err) { S.msg = text; S.err = !!err; $("status").textContent = text; $("status").classList.toggle("err", !!err); }
+  function render(waveCol) {
+    drawLed("ledL", S.percent); drawLed("ledR", S.elapsed); drawFace(S.face, false); drawTiles(waveCol === undefined ? -1 : waveCol);
+    drawKeyLed(S.kb ? S.kb.key : null); drawBpmLed(S.kb ? S.kb.bpm : null);
+    const active = S.state === "downloading" || S.state === "converting" || S.state === "analysing";
+    $("go").textContent = active ? "Cancel" : "Download";
+    $("result").style.display = S.state === "done" ? "block" : "none";
+  }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+  function reset() {
+    stop(); Object.assign(S, { state: "idle", percent: 0, elapsed: 0, mineTile: -1, face: "smile", kb: null, hold: false });
+    setStatus(MSG.idle, false); render();
+  }
+  function fail(kind) {
+    stop(); S.state = "error"; S.face = "dead";
+    S.mineTile = order[Math.min(N - 1, Math.floor(S.percent / 100 * N * REVEAL_CAP))];
+    setStatus(MSG[kind], true); render();
+  }
+  function startAnalysing() {
+    S.state = "analysing"; S.face = "cool"; S.percent = 100; S.anStart = performance.now(); setStatus(MSG.analysing, false); render(-1);
+  }
+  function finish(addHist) {
+    stop(); S.state = "done"; S.percent = 100; S.face = "cool";
+    S.kb = $("resMode").value === "unknown" ? null : SAMPLES[sampleIx++ % SAMPLES.length];
+    const title = titleFromLink(S.link), size = S.fmt === 0 ? (6.9 + (title.length % 5) * 0.4).toFixed(1) + " MB" : (38.2 + (title.length % 7)).toFixed(1) + " MB";
+    $("rTitle").textContent = title; $("rMeta").textContent = FORMATS[S.fmt] + (S.fmt ? "" : " kbps") + "  |  " + size;
+    S.last = { title, fmt: FORMATS[S.fmt], size, ok: true };
+    if (addHist !== false) { history.unshift({ title, fmt: FORMATS[S.fmt], ok: true, key: S.kb ? S.kb.key : "--", bpm: S.kb ? S.kb.bpm : "--" }); histSel = -1; renderHist(); }
+    setStatus(MSG.done(S.kb), false); render();
+  }
+  function titleFromLink(l) { const m = /[?&]v=([\w-]{6,})|youtu\.be\/([\w-]{6,})/.exec(l); return "YouTube audio - " + (m ? (m[1] || m[2]) : "clip"); }
+  function validLink(l) { return /^https?:\/\/((www|m|music)\.)?(youtube\.com\/watch\?[^ ]*v=[\w-]{6,}|youtu\.be\/[\w-]{6,})/i.test(l.trim()); }
+
+  function start() {
+    const l = $("link").value.trim();
+    if (!l) { setStatus(MSG.empty, true); return; }
+    reset();
+    if (!validLink(l)) { S.face = "dead"; S.state = "error"; S.mineTile = order[0]; setStatus(MSG.invalid, true); render(); return; }
+    S.link = l; S.fmt = paramState.format; S.fail = $("failMode").value; S.failAt = 35 + Math.random() * 25;
+    if (S.fail === "tool_missing") { S.state = "error"; S.face = "dead"; S.mineTile = order[0]; setStatus(MSG.tool_missing, true); render(); return; }
+    S.state = "downloading"; S.face = "oh"; S.t0 = performance.now(); setStatus("Downloading... 0%", false); render();
+    timer = setInterval(tick, 33);
+  }
+  function tick() {
+    const now = performance.now(), el = now - S.t0; S.elapsed = Math.floor(el / 1000);
+    if (S.state === "downloading") {
+      S.percent = Math.min(100, Math.floor(el / DL_MS * 100));
+      if ((S.fail === "unavailable" || S.fail === "update_ytdlp") && S.percent >= S.failAt) { fail(S.fail); return; }
+      setStatus("Downloading... " + S.percent + "%", false);
+      if (S.percent >= 100) { S.state = "converting"; S.convStart = now; setStatus("Converting to " + FORMATS[S.fmt] + "...", false); }
+      render();
+    } else if (S.state === "converting") {
+      const p = Math.min(1, (now - S.convStart) / CV_MS), wave = Math.floor(p * (COLS + 1));
+      render(wave);
+      if (p >= 1) startAnalysing();
+    } else if (S.state === "analysing") {
+      const col = Math.floor((now - S.anStart) / 110) % (COLS + 2) - 1; // slow sweep, ~1.9 s per pass
+      render(col);
+      if (!S.hold && now - S.anStart >= AN_MS) finish();
+    }
+  }
+
+  // ---------- history ----------
+  const history = [
+    { title: "Nils Frahm - Says (live at the Funkhaus Berlin)", fmt: "WAV 24-bit", ok: true, key: "A min", bpm: 128 },
+    { title: "Lofi Hip Hop Radio - beats to relax", fmt: "MP3 320", ok: true, key: "C# maj", bpm: 92 },
+    { title: "Spoken word sample - rain", fmt: "MP3 320", ok: true, key: "--", bpm: "--" },
+    { title: "Reference mix (file moved)", fmt: "MP3 320", ok: false, key: "Bb min", bpm: 140 },
+    { title: "Amen Break - original 1969 loop (old entry, no key or bpm)", fmt: "WAV 24-bit", ok: true },
+    { title: "Old entry that was moved (no key or bpm)", fmt: "MP3 320", ok: false }
+  ];
+  let histOpen = false, histSel = -1;
+  function renderHist() {
+    $("histHdr").innerHTML = (histOpen ? "&#9660;" : "&#9658;") + "&nbsp; History (" + history.length + ")";
+    const h = $("hist"); h.innerHTML = "";
+    history.forEach((e, i) => {
+      const r = document.createElement("div"); r.className = "row" + (e.ok ? "" : " missing") + (i === histSel ? " sel" : "");
+      r.innerHTML = '<span class="t"></span><span class="f"></span><span class="k"></span><span class="b"></span><span class="s"></span>';
+      r.children[0].textContent = e.title; r.children[1].textContent = e.fmt;
+      r.children[2].textContent = e.key === undefined ? "" : e.key; r.children[3].textContent = e.bpm === undefined ? "" : e.bpm; // undefined = old entry, blank
+      if (e.key === "--") r.children[2].classList.add("unk"); if (e.bpm === "--") r.children[3].classList.add("unk");
+      r.children[4].textContent = e.ok ? "OK" : "Missing";
+      r.draggable = e.ok;
+      r.addEventListener("mousedown", () => { histSel = i; renderHist(); });
+      r.addEventListener("dragstart", (ev) => { ev.dataTransfer.setData("text/plain", e.title); console.log("[drag-out] performExternalDragDropOfFiles(history row):", e.title); });
+      h.appendChild(r);
+    });
+    h.style.display = histOpen ? "block" : "none";
+  }
+
+  // ---------- wiring ----------
+  $("go").addEventListener("click", () => { if (S.state === "downloading" || S.state === "converting" || S.state === "analysing") reset(); else start(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.state !== "idle" && S.state !== "done" && S.state !== "error") reset(); });
+
+  // ---------- state preview switcher ----------
+  const PREVIEWS = ["idle", "downloading", "converting", "analysing", "done (key+bpm)", "done (unknown)", "history expanded", "error"];
+  function preview(name) {
+    const keepRes = $("resMode").value;
+    reset(); histOpen = false; renderHist(); S.hold = true; S.link = "https://youtu.be/dQw4w9WgXcQ";
+    if (name === "downloading") { Object.assign(S, { state: "downloading", face: "oh", percent: 47, elapsed: 6 }); setStatus("Downloading... 47%", false); render(); }
+    else if (name === "converting") { Object.assign(S, { state: "converting", face: "oh", percent: 100, elapsed: 9 }); setStatus("Converting to " + FORMATS[S.fmt] + "...", false); render(8); }
+    else if (name === "analysing") { Object.assign(S, { elapsed: 12 }); startAnalysing(); S.elapsed = 12; timer = setInterval(() => { const n = performance.now(); render(Math.floor((n - S.anStart) / 110) % (COLS + 2) - 1); }, 33); }
+    else if (name.startsWith("done") || name === "history expanded") {
+      $("resMode").value = name === "done (unknown)" ? "unknown" : "key"; S.elapsed = 14; finish(false); S.elapsed = 14; render();
+      $("resMode").value = keepRes;
+      if (name === "history expanded") { histOpen = true; histSel = 1; renderHist(); }
+    } else if (name === "error") { Object.assign(S, { state: "error", face: "dead", percent: 38, elapsed: 5 }); S.mineTile = order[Math.floor(0.38 * N * REVEAL_CAP)]; setStatus(MSG.unavailable, true); render(); }
+    document.querySelectorAll("#switcher .sw").forEach((b) => b.classList.toggle("on", b.textContent === name));
+  }
+  PREVIEWS.forEach((n) => { const b = document.createElement("button"); b.className = "sw"; b.textContent = n; b.addEventListener("click", () => preview(n)); $("switcher").appendChild(b); });
+  $("smiley").addEventListener("mousedown", () => { $("smiley").classList.add("pressed"); });
+  window.addEventListener("mouseup", () => { $("smiley").classList.remove("pressed"); });
+  $("smiley").addEventListener("click", reset);
+  $("paste").addEventListener("click", async () => {
+    let t = "";
+    try { t = await navigator.clipboard.readText(); } catch (e) { /* ignore */ }
+    if (!t) t = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    $("link").value = t; console.log("[ui] pasted link:", t); if (S.state === "idle") setStatus(MSG.idle, false);
+  });
+  $("link").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
+  $("fmt").addEventListener("click", (e) => { e.stopPropagation(); const l = $("fmtlist"); l.style.display = l.style.display === "block" ? "none" : "block"; });
+  document.addEventListener("click", () => { $("fmtlist").style.display = "none"; });
+  document.querySelectorAll("#fmtlist div").forEach((d) => d.addEventListener("click", () => {
+    const i = +d.dataset.i; paramState.format = i; $("fmtLabel").textContent = FORMATS[i];
+    document.querySelectorAll("#fmtlist div").forEach((x) => x.classList.toggle("sel", x === d));
+    Juce.postMessage({ type: "parameter", id: "format", value: i, label: FORMATS[i] });
+  }));
+  $("histHdr").addEventListener("click", () => { histOpen = !histOpen; renderHist(); });
+  $("finder").addEventListener("click", () => {
+    const e = histSel >= 0 ? history[histSel] : history[0];
+    if (!e) { setStatus("Nothing to show yet.", false); return; }
+    console.log("[action] revealToUser:", e.title); setStatus("Show in Finder: " + e.title, false);
+  });
+  $("result").addEventListener("dragstart", (ev) => { ev.dataTransfer.setData("text/plain", $("rTitle").textContent); console.log("[drag-out] performExternalDragDropOfFiles(result tile):", $("rTitle").textContent); });
+  document.addEventListener("dragstart", (e) => { if (!e.target.closest || !e.target.closest("#result, .row")) e.preventDefault(); });
+
+  drawGrip(); renderHist(); reset();
+  Juce.getComboBoxState("format");
+</script>
+</body>
+</html>
