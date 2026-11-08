@@ -13,6 +13,9 @@ struct HistoryEntry
     juce::String format;     // "mp3" | "wav"
     juce::String timestamp;  // ISO 8601
     juce::int64 bytes = 0;
+    juce::String key;        // "A min" / "C# maj"; empty = unknown (see `analysed`)
+    int bpm = 0;             // 0 = unknown
+    bool analysed = false;   // false: entry predates Key/BPM (shown blank); true + empty = "--"
 };
 
 //==============================================================================
@@ -20,7 +23,8 @@ struct HistoryEntry
 //
 //  - File: <baseDir>/history.json, default baseDir =
 //    ~/Library/Application Support/LinkGrabber
-//  - Schema: { "version":1, "entries":[ {id,title,path,format,timestamp,bytes} ] }
+//  - Schema: { "version":1, "entries":[ {id,title,path,format,timestamp,bytes[,key,bpm,analysed]} ] }
+//    (key/bpm/analysed are optional: old files stay valid)
 //  - Newest first, capped at maxEntries. Oldest rows are dropped from the list;
 //    files on disk are NEVER deleted by this class.
 //  - MESSAGE THREAD ONLY (all I/O). Never call from the audio thread.
@@ -229,6 +233,9 @@ private:
                         e.format = obj->getProperty("format").toString().equalsIgnoreCase("wav") ? "wav" : "mp3";
                         e.timestamp = obj->getProperty("timestamp").toString();
                         e.bytes = static_cast<juce::int64>(obj->getProperty("bytes"));
+                        e.analysed = static_cast<bool>(obj->getProperty("analysed"));
+                        e.key = e.analysed ? obj->getProperty("key").toString().substring(0, 12) : juce::String();
+                        e.bpm = e.analysed ? juce::jlimit(0, 400, static_cast<int>(obj->getProperty("bpm"))) : 0;
                         out.push_back(std::move(e));
                     }
                 }
@@ -263,6 +270,12 @@ private:
             o->setProperty("format", e.format);
             o->setProperty("timestamp", e.timestamp);
             o->setProperty("bytes", e.bytes);
+            if (e.analysed)
+            {
+                o->setProperty("analysed", true);
+                o->setProperty("key", e.key);
+                o->setProperty("bpm", e.bpm);
+            }
             rows.add(juce::var(o.get()));
         }
 

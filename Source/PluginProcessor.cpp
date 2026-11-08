@@ -81,6 +81,9 @@ void LinkGrabberAudioProcessor::downloadFinished(const DownloadManager::Status& 
     entry.format = finished.format;
     entry.timestamp = juce::Time::getCurrentTime().toISO8601(true);
     entry.bytes = file.getSize();
+    entry.analysed = finished.analysed;
+    entry.key = finished.keyName;
+    entry.bpm = finished.bpm;
     historyStore.add(entry);
 }
 

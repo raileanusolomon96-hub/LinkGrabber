@@ -139,12 +139,12 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
     const bool reset = (s.jobSerial != 0 && s.jobSerial == viewResetSerial);
     const State st = reset ? State::idle : s.state;
     viewState = st;
-    viewActive = (st == State::lookingUp || st == State::downloading || st == State::converting);
+    viewActive = (st == State::lookingUp || st == State::downloading || st == State::converting || st == State::analysing);
 
     // Percent is monotonic within a job; converting/done hold 100.
     if (reset || st == State::idle || st == State::lookingUp)
         shownPercent = 0;
-    else if (st == State::converting || st == State::done)
+    else if (st == State::converting || st == State::analysing || st == State::done)
         shownPercent = 100;
     else
         shownPercent = juce::jmax(shownPercent, juce::jlimit(0, 100, s.percent));
@@ -170,7 +170,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
 
     // Smiley
     using Face = lgui::SmileyButton::Face;
-    smiley.setFace(st == State::done ? Face::cool
+    smiley.setFace(st == State::done || st == State::analysing ? Face::cool
                    : st == State::error ? Face::dead
                    : viewActive && st != State::idle ? Face::oh : Face::smile);
 
@@ -189,6 +189,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             board.setView(Mode::converting, shownPercent, (int) std::floor(prog * (lgui::TileBoard::cols + 1)), -1);
             break;
         }
+        case State::analysing:   // Phase 3 UI step adds the sweep band
         case State::done:        board.setView(Mode::done, 100, -1, -1); break;
         case State::error:       board.setView(Mode::downloading, shownPercent, -1, board.mineTileFor(shownPercent)); break;
     }
@@ -210,6 +211,7 @@ void LinkGrabberAudioProcessorEditor::applyStatus(const DownloadManager::Status&
             case State::lookingUp:   statusText = "Looking up video..."; break;
             case State::downloading: statusText = "Downloading... " + juce::String(shownPercent) + "%"; break;
             case State::converting:  statusText = "Converting to " + formatLabelFor(s.format, formatBox.getText()) + "..."; break;
+            case State::analysing:   statusText = "Listening for key and tempo..."; break;
             case State::done:
                 statusText = tileShown ? juce::String("Done. Drag the file tile into your DAW.")
                                        : "Done. File saved to " + juce::File(s.filePath).getParentDirectory().getFullPathName();

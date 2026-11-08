@@ -210,10 +210,42 @@ namespace DownloadCommand
         return isPlausibleVideoId(candidate) ? candidate : juce::String();
     }
 
-    // "<title> [<id>].<ext>" -> title + id (id empty if the pattern is absent).
+    // Key/BPM file-name tag appended after the id: "Am 128bpm", "C#", "90bpm" ...
+    inline bool isAnalysisTag(const juce::String& tag)
+    {
+        auto parts = juce::StringArray::fromTokens(tag, " ", "");
+        parts.removeEmptyStrings();
+        if (parts.isEmpty() || parts.size() > 2)
+            return false;
+
+        auto isKey = [](const juce::String& s)
+        {
+            int i = 0;
+            if (s.isEmpty() || s[0] < 'A' || s[0] > 'G')
+                return false;
+            ++i;
+            if (i < s.length() && s[i] == '#') ++i;
+            if (i < s.length() && s[i] == 'm') ++i;
+            return i == s.length();
+        };
+        auto isBpm = [](const juce::String& s)
+        {
+            return s.length() > 3 && s.endsWith("bpm") && s.dropLastCharacters(3).containsOnly("0123456789");
+        };
+
+        if (parts.size() == 1)
+            return isKey(parts[0]) || isBpm(parts[0]);
+        return isKey(parts[0]) && isBpm(parts[1]);
+    }
+
+    // "<title> [<id>].<ext>" or "<title> [<id>] <key/bpm tag>.<ext>" -> title + id
+    // (id empty if the pattern is absent).
     inline void splitTitleAndId(const juce::File& file, juce::String& title, juce::String& id)
     {
-        const auto stem = file.getFileNameWithoutExtension();
+        auto stem = file.getFileNameWithoutExtension();
+        const int tagAt = stem.lastIndexOf("] ");
+        if (tagAt > 0 && isAnalysisTag(stem.substring(tagAt + 2)))
+            stem = stem.substring(0, tagAt + 1);
         title = stem;
         id = {};
 

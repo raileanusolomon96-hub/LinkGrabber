@@ -1,6 +1,7 @@
 #include "DownloadManager.h"
 #include "JobCleanup.h"
 #include "LogFile.h"
+#include <juce_audio_basics/juce_audio_basics.h>
 
 using namespace DownloadCommand;
 
@@ -282,6 +283,102 @@ juce::File DownloadManager::resolveFinalFile(const OutputParser& parser, const j
 }
 
 //==============================================================================
+bool DownloadManager::analyseFile(const juce::File& file, const ToolPaths& tools, keybpm::Result& result)
+{
+    // ffmpeg -> raw mono 22.05 kHz s16le temp file (first 30 min at most), then analyse the
+    // middle 3 minutes. Never throws; any failure leaves `result` as "unknown".
+    constexpr int maxDecodeSeconds = 1800;
+    constexpr int decodeTimeoutMs = 90000;
+
+    const auto raw = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                         .getChildFile("LinkGrabber-analysis-" + juce::String(getStatus().jobSerial)
+                                       + "-" + juce::String(juce::Time::getMillisecondCounter()) + ".raw");
+
+    struct TempCleanup
+    {
+        juce::File f;
+        ~TempCleanup() { f.deleteFile(); }
+    } cleanup { raw };
+
+    juce::StringArray argv;
+    argv.add("/usr/bin/env");
+    argv.add("PATH=" + tools.childPath);
+    argv.add(tools.ffmpeg.getFullPathName());
+    argv.addArray({ "-nostdin", "-v", "error", "-y", "-i", file.getFullPathName(), "-vn",
+                    "-ac", "1", "-ar", juce::String((int) keybpm::kSampleRate),
+                    "-t", juce::String(maxDecodeSeconds), "-f", "s16le", "-acodec", "pcm_s16le",
+                    raw.getFullPathName() });
+
+    ProcessRunner runner;
+    if (! runner.start(argv))
+    {
+        LogFile::append(jobTag(getStatus().jobSerial) + " analysis: could not start ffmpeg");
+        return true;
+    }
+
+    {
+        const juce::ScopedLock sl(childLock);
+        activeRunner = &runner;
+    }
+    if (cancelRequested.load() || threadShouldExit())
+        runner.requestTerminate();
+
+    char buffer[2048];
+    const auto began = juce::Time::getMillisecondCounterHiRes();
+    bool timedOut = false;
+    for (;;)
+    {
+        if (runner.read(buffer, static_cast<int>(sizeof(buffer)), pollTimeoutMs) < 0)
+            break;
+        if (cancelRequested.load() || threadShouldExit())
+            break;
+        if (juce::Time::getMillisecondCounterHiRes() - began > decodeTimeoutMs)
+        {
+            timedOut = true;
+            break;
+        }
+    }
+
+    const bool cancelled = cancelRequested.load() || threadShouldExit();
+    const int code = (cancelled || timedOut) ? runner.killProcessGroup(killGraceMs)
+                                             : runner.finish(normalExitWaitMs);
+    {
+        const juce::ScopedLock sl(childLock);
+        activeRunner = nullptr;
+    }
+    if (cancelled)
+        return false;
+    if (timedOut || code != 0)
+    {
+        LogFile::append(jobTag(getStatus().jobSerial) + " analysis: decode failed (exit "
+                        + juce::String(code) + (timedOut ? ", timeout" : "") + ")");
+        return true;
+    }
+
+    const auto samples = static_cast<juce::int64>(raw.getSize() / 2);
+    const juce::int64 window = juce::jmin<juce::int64>(samples, static_cast<juce::int64>(180.0 * keybpm::kSampleRate));
+    if (window < static_cast<juce::int64>(keybpm::kSampleRate))
+        return true;  // under a second: nothing to analyse
+
+    juce::FileInputStream in(raw);
+    if (! in.openedOk())
+        return true;
+    in.setPosition(((samples - window) / 2) * 2);
+
+    juce::MemoryBlock bytes(static_cast<size_t>(window) * 2);
+    const auto got = in.read(bytes.getData(), static_cast<int>(bytes.getSize()));
+    const auto count = static_cast<size_t>(got) / 2;
+
+    std::vector<float> mono(count);
+    const auto* pcm = static_cast<const juce::int16*>(bytes.getData());
+    for (size_t i = 0; i < count; ++i)
+        mono[i] = static_cast<float>(pcm[i]) / 32768.0f;
+
+    result = keybpm::analyse(mono, [this] { return cancelRequested.load() || threadShouldExit(); });
+    return ! result.cancelled;
+}
+
+//==============================================================================
 void DownloadManager::run()
 {
     // Worker thread. Touches only: job (read-only), the snapshot (publish), the log, the child.
@@ -410,14 +507,42 @@ void DownloadManager::run()
         const auto file = resolveFinalFile(parser, outDir);
         if (file.existsAsFile())
         {
-            juce::String title, id;
-            splitTitleAndId(file, title, id);
-            const auto videoId = id.isNotEmpty() ? id : parser.getVideoId();
-            const auto path = file.getFullPathName();
-            const auto bytes = file.getSize();
+            // Key / BPM (never fails the download; cancel keeps the untagged file).
+            publish([](Status& s) { s.state = State::analysing; s.percent = 100; }, false);
 
-            LogFile::append(jobTag(getStatus().jobSerial) + " done file=\"" + file.getFileName()
-                            + "\" bytes=" + juce::String(bytes));
+            keybpm::Result analysis;
+            const bool completed = analyseFile(file, tools, analysis);
+            const bool userCancelled = ! completed && ! threadShouldExit();
+            const bool destroyed = ! completed && threadShouldExit();
+
+            auto finalFile = file;
+            if (completed)
+            {
+                const auto tag = juce::String(keybpm::fileTag(analysis));
+                if (tag.isNotEmpty())
+                {
+                    const auto target = file.getSiblingFile(file.getFileNameWithoutExtension() + " " + tag
+                                                            + file.getFileExtension());
+                    if (target == file || (target.deleteFile() && file.moveFileTo(target)))
+                        finalFile = target;
+                    else
+                        LogFile::append(jobTag(getStatus().jobSerial) + " rename to tagged name failed");
+                }
+            }
+
+            juce::String title, id;
+            splitTitleAndId(finalFile, title, id);
+            const auto videoId = id.isNotEmpty() ? id : parser.getVideoId();
+            const auto path = finalFile.getFullPathName();
+            const auto bytes = finalFile.getSize();
+            const auto keyName = juce::String(keybpm::keyName(analysis));
+            const int bpm = analysis.bpmValid ? static_cast<int>(std::lround(analysis.bpm)) : 0;
+
+            LogFile::append(jobTag(getStatus().jobSerial) + " done file=\"" + finalFile.getFileName()
+                            + "\" bytes=" + juce::String(bytes)
+                            + (completed ? " key=" + (keyName.isNotEmpty() ? keyName : juce::String("?"))
+                                               + " bpm=" + (bpm > 0 ? juce::String(bpm) : juce::String("?"))
+                                         : juce::String(destroyed ? " analysis=destroyed" : " analysis=cancelled")));
 
             publish([&](Status& s)
                     {
@@ -427,6 +552,10 @@ void DownloadManager::run()
                         s.title = title;
                         s.videoId = videoId;
                         s.bytes = bytes;
+                        s.analysed = true;
+                        s.keyName = keyName;
+                        s.bpm = bpm;
+                        s.analysisCancelled = userCancelled;
                     },
                     true);
             return;

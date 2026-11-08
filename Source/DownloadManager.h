@@ -5,6 +5,7 @@
 #include "DownloadCommand.h"
 #include "ToolLocator.h"
 #include "ProcessRunner.h"
+#include "KeyBpmAnalyser.h"
 
 //==============================================================================
 // Processor-OWNED job runner (architecture.md, Core Component 3, D3, R6).
@@ -29,7 +30,7 @@ class DownloadManager : private juce::Thread,
                         private juce::AsyncUpdater
 {
 public:
-    enum class State { idle, lookingUp, downloading, converting, done, error };
+    enum class State { idle, lookingUp, downloading, converting, analysing, done, error };
 
     struct Status
     {
@@ -44,9 +45,13 @@ public:
         juce::String detail;             // last tool output lines (diagnostics only, never shown raw in the UI)
         double elapsedSeconds = 0.0;
         juce::int64 bytes = 0;
+        bool analysed = false;           // state == done: Key/BPM step ran (or was cancelled)
+        juce::String keyName;            // "A min" / "C# maj"; empty = unknown
+        int bpm = 0;                     // 0 = unknown
+        bool analysisCancelled = false;  // user cancelled during analysing: file kept, untagged
         juce::uint32 jobSerial = 0;      // increments per start()
 
-        bool isActive() const noexcept   { return state == State::lookingUp || state == State::downloading || state == State::converting; }
+        bool isActive() const noexcept   { return state == State::lookingUp || state == State::downloading || state == State::converting || state == State::analysing; }
         bool isFinished() const noexcept { return state == State::done || state == State::error; }
     };
 
@@ -103,6 +108,9 @@ private:
                       const juce::String& detail = {});
     void finishCancelled(const juce::File& outDir, const juce::String& videoId);
     void signalChild(bool force);
+    // Worker thread. Decodes `file` with ffmpeg to a temporary raw mono file and runs the analyser.
+    // Returns false if cancelled (result untouched).
+    bool analyseFile(const juce::File& file, const ToolPaths& tools, keybpm::Result& result);
     juce::File resolveFinalFile(const DownloadCommand::OutputParser& parser,
                                 const juce::File& outDir) const;
 
